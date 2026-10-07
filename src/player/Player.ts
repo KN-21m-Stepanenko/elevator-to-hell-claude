@@ -16,6 +16,7 @@ export class Player {
   onInteract: () => void = () => {};
   onToggleWeapon: () => void = () => {};
   onFire: () => void = () => {};
+  onFireHeld: () => void = () => {};
 
   private yaw: number;
   private pitch = 0;
@@ -27,6 +28,7 @@ export class Player {
   private corpseRoot: TransformNode;
   private readonly bloodBursts: BloodBurst[] = [];
   private freeLook = false;
+  private fireHeld = false;
   private deathInitialPitch = 0;
   private deathPrepared = false;
   private cameraShakeRemaining = 0;
@@ -62,8 +64,19 @@ export class Player {
       }
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
-    window.addEventListener("blur", () => this.keys.clear());
-    document.addEventListener("mousedown", (e) => { if (this.locked && this.inputEnabled && e.button === 0) this.onFire(); });
+    window.addEventListener("blur", () => {
+      this.keys.clear();
+      this.fireHeld = false;
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (this.locked && this.inputEnabled && e.button === 0) {
+        this.fireHeld = true;
+        this.onFire();
+      }
+    });
+    document.addEventListener("mouseup", (e) => {
+      if (e.button === 0) this.fireHeld = false;
+    });
     document.addEventListener("mousemove", (e) => {
       // В режиме freeLook камера может вращаться и после снятия pointer lock.
       if ((!this.locked && !this.freeLook) || (!this.inputEnabled && !this.freeLook)) return;
@@ -72,7 +85,10 @@ export class Player {
     });
     document.addEventListener("pointerlockchange", () => {
       this.locked = document.pointerLockElement === this.canvas;
-      if (!this.locked) this.keys.clear();
+      if (!this.locked) {
+        this.keys.clear();
+        this.fireHeld = false;
+      }
       this.onLockChange(this.locked);
     });
   }
@@ -90,6 +106,7 @@ export class Player {
   freezeInput(releasePointerLock = true) {
     this.inputEnabled = false;
     this.keys.clear();
+    this.fireHeld = false;
     if (releasePointerLock && document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
 
@@ -123,6 +140,7 @@ export class Player {
       this.alive = false;
       this.inputEnabled = false;
       this.keys.clear();
+      this.fireHeld = false;
       if (!this.deathPrepared) {
         this.deathPrepared = true;
         this.prepareDeath();
@@ -138,6 +156,7 @@ export class Player {
     this.alive = false;
     this.inputEnabled = false;
     this.keys.clear();
+    this.fireHeld = false;
     if (!this.deathPrepared) {
       this.deathPrepared = true;
       this.prepareDeath();
@@ -164,6 +183,10 @@ export class Player {
 
     const P = CONFIG.player;
     this.updateCameraShake(dt);
+
+    if (this.locked && this.fireHeld) {
+      this.onFireHeld();
+    }
     const down = (c: string) => (this.locked && this.keys.has(c) ? 1 : 0);
     const f = down("KeyW") - down("KeyS");
     const r = down("KeyD") - down("KeyA");

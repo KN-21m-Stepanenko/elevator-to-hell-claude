@@ -24,8 +24,12 @@ export abstract class Monster {
   private readonly deathRotationDirection: number;
   private peerProvider: () => Monster[] = () => [];
   // Сторона обхода препятствия выбирается один раз для каждого монстра,
-// чтобы он не метался влево-вправо при каждом кадре.
-private readonly groundDetourSign: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
+  // чтобы он не метался влево-вправо при каждом кадре.
+  private readonly groundDetourSign: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
+  private deathHitReactionProgress = 0;
+  private readonly deathHitReactionDuration = 0.22;
+  private deathReactionRotation = new Vector3();
+  private deathReactionScale = new Vector3(1, 1, 1);
 
   protected constructor(
     protected readonly scene: Scene,
@@ -48,19 +52,38 @@ private readonly groundDetourSign: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
 
   damage(amount: number) {
     if (!this.alive) return;
+
     this.hp -= amount;
+
+    if (this.hp <= 0) {
+      // Монстр сначала получает короткую реакцию на попадание,
+      // и только после неё начинается анимация смерти.
+      this.hitFlash = this.deathHitReactionDuration;
+      this.die();
+      return;
+    }
+
     this.hitFlash = 0.12;
-    if (this.hp <= 0) this.die();
   }
 
   protected die() {
     if (!this.alive) return;
+
     this.alive = false;
     this.deathStarted = true;
     this.deathProgress = 0;
+    this.deathHitReactionProgress = 0;
+
     this.deathStartY = this.root.position.y;
-    this.materials.forEach((m) => (m.emissiveColor = Color3.Black()));
-    this.root.getChildMeshes().forEach((mesh) => (mesh.checkCollisions = false));
+    this.deathReactionRotation.copyFrom(this.root.rotation);
+    this.deathReactionScale.copyFrom(this.root.scaling);
+
+    // Красная вспышка сохраняется на протяжении всей реакции попадания.
+    this.hitFlash = this.deathHitReactionDuration;
+
+    this.root.getChildMeshes().forEach(
+      (mesh) => (mesh.checkCollisions = false),
+    );
   }
 
   /** Длительность анимации смерти, с (потомки переопределяют). */
@@ -70,15 +93,82 @@ private readonly groundDetourSign: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
   /** Доля заваливания тела (0..1) от прогресса; по умолчанию плавная. */
   protected toppleFraction(t: number) { return t * t * (3 - 2 * t); }
 
-  protected updateCorpse(dt: number) {
-    if (!this.deathStarted) return;
-    this.deathProgress = Math.min(1, this.deathProgress + dt / this.deathDuration);
-    const t = this.deathProgress;
-    this.onDeathPose(t);
-    const k = this.toppleFraction(t);
-    this.root.position.y = this.deathStartY + (this.deathTargetY - this.deathStartY) * Math.min(1, k);
-    this.root.rotation.x = this.deathRotationDirection * k * (Math.PI / 2);
+protected updateCorpse(dt: number) {
+  if (!this.deathStarted) return;
+
+  // Сначала короткая реакция на попадание.
+  if (
+    this.deathHitReactionProgress <
+    this.deathHitReactionDuration
+  ) {
+    this.deathHitReactionProgress = Math.min(
+      this.deathHitReactionDuration,
+      this.deathHitReactionProgress + dt,
+    );
+
+    const t =
+      this.deathHitReactionProgress /
+      this.deathHitReactionDuration;
+
+    const impulse = Math.sin(t * Math.PI);
+
+    this.updateHitFlash(dt);
+
+    // Небольшой резкий отскок/вздрагивание.
+    this.root.rotation.copyFrom(
+      this.deathReactionRotation,
+    );
+
+    this.root.rotation.x -=
+      impulse * 0.18;
+
+    this.root.rotation.z =
+      this.deathReactionRotation.z +
+      Math.sin(t * Math.PI * 2) *
+        0.12;
+
+    this.root.scaling.copyFrom(
+      this.deathReactionScale,
+    );
+
+    this.root.scaling.scaleInPlace(
+      1 + impulse * 0.035,
+    );
+
+    return;
   }
+
+  // Реакция закончилась — начинаем обычную анимацию смерти.
+  this.hitFlash = 0;
+  this.materials.forEach(
+    (m) => (m.emissiveColor = Color3.Black()),
+  );
+
+  this.deathProgress = Math.min(
+    1,
+    this.deathProgress +
+      dt / this.deathDuration,
+  );
+
+  const t = this.deathProgress;
+  this.onDeathPose(t);
+
+  const k = this.toppleFraction(t);
+
+  this.root.position.y =
+    this.deathStartY +
+    (this.deathTargetY - this.deathStartY) *
+      Math.min(1, k);
+
+  this.root.rotation.x =
+    this.deathReactionRotation.x +
+    this.deathRotationDirection *
+      k *
+      (Math.PI / 2);
+
+  this.root.rotation.z =
+    this.deathReactionRotation.z;
+}
 
   get deathFinished() {
     return this.deathStarted && this.deathProgress >= 1;
