@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elevator to Hell</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #000;
+      color: #d8c9a0; font-family: "Courier New", monospace;
+    }
+
+    /* Пиксельный рендер как в Quake + прицел-курсор */
+    #game {
+      width: 100%; height: 100%; display: block; outline: none;
+      image-rendering: crisp-edges; image-rendering: pixelated;
+      cursor: crosshair;
+    }
+
+    /* Прицел — крестик с янтарным свечением */
+    #crosshair {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -52%);
+      color: #d8b45a; font: 20px/1 "Courier New", monospace;
+      text-shadow: 0 0 3px #000, 0 0 6px rgba(216,180,90,.6);
+      pointer-events: none; user-select: none;
+    }
+
+    /* Подсказка взаимодействия (появляется под прицелом) */
+    #hint {
+      position: fixed; left: 50%; top: 56%; transform: translateX(-50%);
+      padding: 4px 12px; background: rgba(0, 0, 0, .65);
+      border: 1px solid rgba(216, 180, 90, .35);
+      font-size: 18px; color: #ffd060;
+      text-shadow: 0 1px 2px #000; pointer-events: none;
+    }
+
+    /* Всплывающее сообщение (этаж, перегруз и т.д.) */
+    #toast {
+      position: fixed; left: 50%; top: 12%; transform: translateX(-50%);
+      padding: 8px 18px; background: rgba(0, 0, 0, .75);
+      border: 2px solid #c9482b; font-size: 20px; text-align: center;
+      color: #e8d8b0; text-shadow: 0 1px 2px #000; pointer-events: none;
+    }
+
+    /* Стартовый оверлей — тёмный градиент + янтарный заголовок */
+    #overlay {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 6px;
+      background: radial-gradient(circle at 50% 40%, rgba(24,18,10,.88), rgba(0,0,0,.97));
+      color: #b8b2a0; text-align: center; cursor: pointer; user-select: none;
+    }
+    #overlay h1 {
+      margin: 0; color: #e0a83c; font-size: 38px; letter-spacing: .35em;
+      text-shadow: 0 0 18px rgba(224,168,60,.35);
+    }
+    #overlay .tag  { color: #6e7562; font-size: 12px; letter-spacing: .2em; margin: 0 0 10px; }
+    #overlay .sub  { color: #d8b45a; font-size: 16px; margin: 18px 0 0; }
+    #overlay .keys { color: #7d8371; font-size: 12px; margin: 6px 0 0; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="crosshair" class="hidden">+</div>
+  <div id="hint" class="hidden"></div>
+  <div id="toast" class="hidden"></div>
+  <div id="overlay">
+    <p class="tag">Візуалізація системи керування ліфтом</p>
+    <h1>>> ELEVATOR TO HELL >> </h1>
+    <p class="sub">Натисніть для початку</p>
+    <p class="keys">WASD — рух · миша — камера · E — кнопка ліфта · Q — дробовик · ЛКМ — постріл · Esc — пауза</p>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
