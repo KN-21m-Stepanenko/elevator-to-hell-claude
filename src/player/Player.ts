@@ -285,10 +285,10 @@ export class Player {
     };
 
     part("player_legs", [0.4, 0.8, 0.3], [0, 0.4, 0], new Color3(0.12, 0.12, 0.16));
-    part("player_torso", [0.52, 0.65, 0.32], [0, 1.08, 0], new Color3(0.25, 0.28, 0.31));
+    part("player_torso", [0.52, 0.65, 0.32], [0, 1.08, 0], new Color3(0.82, 0.24, 0.03));
     part("player_head", [0.28, 0.3, 0.28], [0, 1.55, 0], new Color3(0.68, 0.48, 0.38));
-    part("player_arm_l", [0.17, 0.72, 0.2], [-0.38, 1.08, 0], new Color3(0.22, 0.24, 0.27));
-    part("player_arm_r", [0.17, 0.72, 0.2], [0.38, 1.08, 0], new Color3(0.22, 0.24, 0.27));
+    part("player_arm_l", [0.17, 0.72, 0.2], [-0.38, 1.08, 0], new Color3(0.25, 0.27, 0.30));
+    part("player_arm_r", [0.17, 0.72, 0.2], [0.38, 1.08, 0], new Color3(0.25, 0.27, 0.30));
     return root;
   }
 }

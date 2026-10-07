@@ -69,8 +69,10 @@ const THEMES: Record<number, Theme> = {
     lamps: [{ pos: [0, 7, -2], color: C(0.6, 0.72, 1), i: 0.6, range: 30 }, { pos: [0, 3.5, 6], color: C(1, 0.85, 0.6), i: 0.6, range: 10 }],
     props: (b) => {
       b.cyl("metal", "mast", 0.3, 7, [-8.2, 3.5, -6.2]);
-      for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.box("metal", "leg", [0.3, 1, 0.3], [7 + x, 0.5, -4 + z]);
-      b.cyl("metal", "watertank", 3, 2.4, [7, 2.2, -4]);
+      for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        b.box("metal", "leg", [0.3, 0.7, 0.3], [7 + x, 0.35, -4 + z]);
+      }
+      b.cyl("metal", "watertank", 3, 2.4, [7, 1.9, -4]);
       b.box("concrete", "vent_a", [1.6, 1, 1.6], [-7, 0.5, 5]);
       b.box("metal", "vent_b", [1.2, 1.8, 1.2], [-8, 0.9, 1]);
       b.box("crate", "cr_a", CRATE, [8.6, 0.6, 3]); b.box("crate", "cr_b", CRATE, [8.6, 0.6, 4.3]);

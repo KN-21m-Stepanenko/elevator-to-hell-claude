@@ -23,6 +23,9 @@ export abstract class Monster {
   private deathTargetY = 0;
   private readonly deathRotationDirection: number;
   private peerProvider: () => Monster[] = () => [];
+  // Сторона обхода препятствия выбирается один раз для каждого монстра,
+// чтобы он не метался влево-вправо при каждом кадре.
+private readonly groundDetourSign: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
 
   protected constructor(
     protected readonly scene: Scene,
@@ -135,29 +138,72 @@ export abstract class Monster {
     return true;
   }
 
-  /** Двигает наземного монстра с прилипанием к стене: сначала XY-плоскость X, затем Z. */
-  protected moveGround(targetX: number, targetZ: number, radius: number, height: number) {
-    const p = this.root.position;
-    const current = new Vector3(p.x, p.y, p.z);
-    const direct = new Vector3(targetX, p.y, targetZ);
+  /** Двигает наземного монстра с обходом препятствий. */
+protected moveGround(targetX: number, targetZ: number, radius: number, height: number) {
+  const p = this.root.position;
+  const current = p.clone();
 
-    if (this.canOccupyGround(direct, radius, height)) {
-      p.x = targetX;
-      p.z = targetZ;
-      return;
-    }
+  const direct = new Vector3(targetX, p.y, targetZ);
 
-    const alongX = new Vector3(targetX, p.y, p.z);
-    if (this.canOccupyGround(alongX, radius, height)) p.x = targetX;
-
-    const alongZ = new Vector3(p.x, p.y, targetZ);
-    if (this.canOccupyGround(alongZ, radius, height)) p.z = targetZ;
-
-    // Если текущая точка уже оказалась внутри динамического объекта, стараемся вернуться к исходной.
-    if (!this.canOccupyGround(p, radius, height)) {
-      p.copyFrom(current);
-    }
+  // Прямой путь свободен — идём напрямую.
+  if (this.canOccupyGround(direct, radius, height)) {
+    p.x = targetX;
+    p.z = targetZ;
+    return;
   }
+
+  const dx = targetX - p.x;
+  const dz = targetZ - p.z;
+  const len = Math.hypot(dx, dz);
+
+  if (len < 0.001) return;
+
+  const dirX = dx / len;
+  const dirZ = dz / len;
+
+  // Перпендикуляр к направлению движения.
+  // Один и тот же знак сохраняется для конкретного монстра,
+  // поэтому при столкновении он последовательно огибает объект с одной стороны.
+  const sideX = -dirZ * this.groundDetourSign;
+  const sideZ = dirX * this.groundDetourSign;
+
+  const normalize = (x: number, z: number) => {
+    const l = Math.hypot(x, z);
+    return l < 0.001 ? null : [x / l, z / l] as const;
+  };
+
+  // Сначала пробуем мягкий диагональный обход,
+  // затем более резкий, затем движение вдоль препятствия.
+  const directions = [
+    normalize(dirX + sideX * 0.9, dirZ + sideZ * 0.9),
+    normalize(dirX + sideX * 1.8, dirZ + sideZ * 1.8),
+    normalize(sideX, sideZ),
+
+    // Если выбранная сторона упёрлась в тупик,
+    // разрешаем попробовать противоположную.
+    normalize(dirX - sideX * 0.9, dirZ - sideZ * 0.9),
+    normalize(dirX - sideX * 1.8, dirZ - sideZ * 1.8),
+  ];
+
+  for (const direction of directions) {
+    if (!direction) continue;
+
+    const candidate = new Vector3(
+      p.x + direction[0] * len,
+      p.y,
+      p.z + direction[1] * len,
+    );
+
+    if (!this.canOccupyGround(candidate, radius, height)) continue;
+
+    p.x = candidate.x;
+    p.z = candidate.z;
+    return;
+  }
+
+  // Ничего безопасного не найдено — остаёмся на исходной позиции.
+  p.copyFrom(current);
+}
 
   /** Раздвигает наземных монстров/NPC/игрока, не позволяя им проходить друг через друга. */
   protected separateGround(

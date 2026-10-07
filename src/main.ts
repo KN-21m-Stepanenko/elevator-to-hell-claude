@@ -44,7 +44,7 @@ const showGameOver = () => {
   player.enableFreeLook();
   weapon.hide();
   monsters.freezeLiving();
-  hud.showResult("ПОРАЗКА", player.deathReason, restartGame);
+  hud.showResult("GAME OVER", player.deathReason, restartGame);
 };
 
 const finishVictory = (message: string) => {
@@ -62,7 +62,7 @@ const finishVictory = (message: string) => {
   const delay = CONFIG.result.delayBeforeMessage * 1000;
   window.setTimeout(() => {
     if (!ending) return;
-    hud.showResult('ПЕРЕМОГА', message, restartGame);
+    hud.showResult("YOU WIN", message, restartGame);
   }, delay);
 };
 

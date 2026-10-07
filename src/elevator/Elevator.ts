@@ -371,7 +371,7 @@ export class Elevator {
 
     if (this.player.alive) {
       const p = this.player.body.position, feet = p.y - CONFIG.player.ellipsoid.y;
-      if (closing.some((d) => d.squeezes(p.x, p.z, feet))) this.player.kill("ВАС РОЗДАВИЛИ ДВЕРІ ЛІФТА");
+      if (closing.some((d) => d.squeezes(p.x, p.z, feet))) this.player.kill("WRONG PLACE, WRONG TIME");
     }
     for (const n of this.npcs) {
       if (!n.alive) continue;
@@ -384,7 +384,7 @@ export class Elevator {
   private checkVoid() {
     if (!this.player.alive || this.rideLock) return;
     const feet = this.player.body.position.y - CONFIG.player.ellipsoid.y;
-    if (feet < CONFIG.safety.voidY) this.player.kill("ВИ ВПАЛИ В ШАХТУ");
+    if (feet < CONFIG.safety.voidY) this.player.kill("CALL FOR EMERGENCY");
   }
 
   /** Погружение в лаву: за пару метров NPC паникуют, при касании пола лавы — сгорают. */
@@ -408,7 +408,7 @@ export class Elevator {
       if (npc.alive && npc.inCabin) npc.kill(cause);
     }
     if ((this.rideLock || this.playerInside()) && this.player.alive) {
-      this.player.kill(cause === "lava" ? "ВИ ЗГОРІЛИ В ЛАВІ" : "КАБІНА РОЗБИЛАСЬ");
+      this.player.kill(cause === "lava" ? "OVERCOOCKED" : "CRUSHED ON YOU");
     }
   }
 }

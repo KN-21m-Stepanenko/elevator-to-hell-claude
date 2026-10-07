@@ -27,12 +27,12 @@ export const CONFIG = {
   npc: { hp: 40, runSpeed: 3.2, sightRange: 18 },
   monsters: {
     walker: {
-      count: [1, 2], hp: 225, speed: 1.9, damage: 12, attackRange: 1.5, attackCooldown: 0.9,
+      count: [2, 5], hp: 225, speed: 1.9, damage: 12, attackRange: 1.5, attackCooldown: 0.9,
       attackDuration: 0.55, attackHitTime: 0.26, sightRange: 30, radius: 0.55, bodyHeight: 2.15,
       deathTime: 1.0, walkAnimRate: 3.4, // длительность падения при смерти (с), частота шага ног
     },
     flying: {
-      count: [2, 3], hp: 175, damage: 18, attackRange: 1.4, hitRadius: 2.1,
+      count: [3, 6], hp: 175, damage: 18, attackRange: 1.4, hitRadius: 2.1,
       attackCooldown: 1.2, orbitRadiusMin: 6, orbitRadiusMax: 9, orbitHeight: 5.5,
       orbitSpeed: 0.8, diveSpeed: 8, recoverSpeed: 5, diveInterval: 2.8,
       deathDropHeight: 0.18, wingFlapSpeed: 9,
