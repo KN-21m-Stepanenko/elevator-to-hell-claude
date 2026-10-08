@@ -1,0 +1,97 @@
+html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #000;
+    color: #d8c9a0; font-family: "Courier New", monospace;
+}
+
+/* Пиксельный рендер как в Quake + прицел-курсор */
+#game {
+    width: 100%; height: 100%; display: block; outline: none;
+    image-rendering: crisp-edges; image-rendering: pixelated;
+    cursor: crosshair;
+}
+
+/* Прицел — крестик с янтарным свечением */
+#crosshair {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -52%);
+    color: #d8b45a; font: 20px/1 "Courier New", monospace;
+    text-shadow: 0 0 3px #000, 0 0 6px rgba(216,180,90,.6);
+    pointer-events: none; user-select: none;
+}
+
+/* Подсказка взаимодействия (появляется под прицелом) */
+#hint {
+    position: fixed; left: 50%; top: 56%; transform: translateX(-50%);
+    padding: 4px 12px; background: rgba(0, 0, 0, .65);
+    border: 1px solid rgba(216, 180, 90, .35);
+    font-size: 18px; color: #ffd060;
+    text-shadow: 0 1px 2px #000; pointer-events: none;
+}
+
+/* Всплывающее сообщение (этаж, перегруз и т.д.) */
+#toast {
+    position: fixed; left: 50%; top: 12%; transform: translateX(-50%);
+    padding: 8px 18px; background: rgba(0, 0, 0, .75);
+    border: 2px solid #c9482b; font-size: 20px; text-align: center;
+    color: #e8d8b0; text-shadow: 0 1px 2px #000; pointer-events: none;
+}
+
+/* Стартовый оверлей — тёмный градиент + янтарный заголовок */
+#overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px;
+    background: radial-gradient(circle at 50% 40%, rgba(24,18,10,.55), rgba(0,0,0,.97));
+    color: #b8b2a0; text-align: center; cursor: pointer; user-select: none;
+}
+#overlay h1 {
+    margin: 0; color: #e0a83c; font-size: 60px; letter-spacing: .35em;
+    text-shadow: 0 0 18px rgba(224,168,60,.35);
+}
+#overlay .tag  { color: #969795; font-size: 24px; letter-spacing: .2em; margin: 0 0 10px; }
+#overlay .sub  { color: #d8b45a; font-size: 38px; margin: 18px 0 0; }
+#overlay .keys { color: #7d8371; font-size: 24px; margin: 6px 0 0; }
+
+.hidden { display: none !important; }
+
+#restartButton {
+    margin-top: 18px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: #b8b2a0;
+    /* font: inherit; */
+    font-size: 18px;
+    /* text-transform: uppercase; */
+    cursor: pointer;
+    text-shadow: 1px 1px 0 #000;
+    animation: restartGlow 1.8s ease-in-out infinite;
+}
+
+#restartButton:hover {
+    color: #ffffff;
+    animation: none;
+    text-shadow:
+    0 0 5px rgba(255, 255, 255, 0.7),
+    1px 1px 0 #000;
+}
+
+#restartButton:focus-visible {
+    outline: 1px solid #b8b2a0;
+    outline-offset: 4px;
+}
+
+@keyframes restartGlow {
+    0%, 100% {
+    opacity: 0.55;
+    text-shadow:
+        1px 1px 0 #000,
+        0 0 2px rgba(255, 180, 90, 0.15);
+    }
+
+    50% {
+    opacity: 1;
+    text-shadow:
+        1px 1px 0 #000,
+        0 0 6px rgba(255, 180, 90, 0.8),
+        0 0 12px rgba(255, 140, 50, 0.35);
+    }
+}
