@@ -234,6 +234,7 @@ export class Weapon {
       pickup.update(dt);
     }
 
+    this.updateRocketLauncherIndicator();
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.updateRailgunGlow();
     this.kick = Math.max(0, this.kick - dt * 5);
@@ -759,6 +760,61 @@ export class Weapon {
     });
   }
 
+  private updateRocketLauncherIndicator() {
+    if (
+      this.activeType !== "ROCKET_LAUNCHER" ||
+      !this.root
+    ) {
+      return;
+    }
+
+    const sight =
+      this.root
+        .getChildMeshes()
+        .find(
+          (mesh) =>
+            mesh.name === "rocket_sight",
+        );
+
+    if (
+      !sight ||
+      !(sight.material instanceof StandardMaterial)
+    ) {
+      return;
+    }
+
+    const ready =
+      this.cooldown <= 0;
+
+    if (ready) {
+      // Гранатомёт готов — верхний элемент красный.
+      sight.material.diffuseColor =
+        new Color3(
+          0.8,
+          0.04,
+          0.02,
+        );
+
+      sight.material.emissiveColor =
+        new Color3(
+          0.35,
+          0.01,
+          0.005,
+        );
+    } else {
+      // Перезарядка — элемент становится серым.
+      sight.material.diffuseColor =
+        new Color3(
+          0.32,
+          0.34,
+          0.36,
+        );
+
+      sight.material.emissiveColor =
+        Color3.Black();
+    }
+  }
+  
   private fireRailgun() {
     const W = CONFIG.weapon.railgun;
 

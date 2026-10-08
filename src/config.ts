@@ -74,18 +74,18 @@ export const CONFIG = {
     },
 
     rocketLauncher: {
-      directDamage: 125,
+      directDamage: 170,
 
       // Увеличил урон по площади.
-      splashDamage: 85,
+      splashDamage: 120,
 
       // Большой радиус взрыва.
-      explosionRadius: 4.5,
+      explosionRadius: 3.0,
 
       // Радиус proximity fuse.
       // Ракета взорвётся ещё до прямого контакта
       // с монстром, если пройдёт достаточно близко.
-      proximityFuseRadius: 1.35,
+      proximityFuseRadius: 1.8,
 
       cooldown: 1.25,
       projectileSpeed: 18,
@@ -149,7 +149,7 @@ export const CONFIG = {
   monsters: {
     walker: {
       count: [3, 5],
-      hp: 225,
+      hp: 240,
       speed: 1.9,
       damage: 12,
       attackRange: 1.5,
