@@ -4,6 +4,7 @@ import {
   MeshBuilder,
   Ray,
   Scene,
+  Matrix,
   StandardMaterial,
   TransformNode,
   Vector3,
@@ -26,7 +27,7 @@ type DamageTarget = Npc | Monster;
 
 // Дополнительный допуск только для расчёта попадания рельсотрона.
 // Геометрия/хитбокс монстров при этом не изменяется.
-const RAILGUN_CALCULATION_RADIUS = 0.25;
+const RAILGUN_CALCULATION_RADIUS = 0.05;
 
 interface RocketProjectile {
   root: TransformNode;
@@ -91,12 +92,13 @@ export class Weapon {
       {
         type: WeaponType;
         position: [number, number];
+        height: number;
       },
     ]>;
 
     for (const [floor, definition] of pickupDefs) {
       const y =
-        Number(floor) * CONFIG.elevator.floorHeight + 0.45;
+        Number(floor) * CONFIG.elevator.floorHeight + definition.height;
 
       this.pickups.push(
         new WeaponPickup(
@@ -233,6 +235,7 @@ export class Weapon {
     }
 
     this.cooldown = Math.max(0, this.cooldown - dt);
+    this.updateRailgunGlow();
     this.kick = Math.max(0, this.kick - dt * 5);
 
     this.flashT -= dt;
@@ -263,10 +266,8 @@ export class Weapon {
 
   private findNearestPickup(position: Vector3) {
     let nearest: WeaponPickup | null = null;
-    let distance = Math.min(CONFIG.weapon.pickupRange, 1.35);
+    let distance = CONFIG.weapon.pickupRange;
 
-    // Подбирать и показывать подсказку можно только для оружия
-    // того же этажа, на котором физически находится игрок.
     const currentFloor = Math.round(
       position.y / CONFIG.elevator.floorHeight,
     );
@@ -279,15 +280,102 @@ export class Weapon {
         continue;
       }
 
-      const d = pickup.distanceTo(position);
+      const pickupPosition =
+        pickup.root.getAbsolutePosition();
 
-      if (d < distance) {
-        distance = d;
-        nearest = pickup;
+      const d = Vector3.Distance(
+        pickupPosition,
+        position,
+      );
+
+      if (d >= distance) {
+        continue;
       }
+
+      // Оружие должно находиться в поле зрения.
+      if (!this.isPickupInView(pickupPosition)) {
+        continue;
+      }
+
+      // Между игроком и оружием не должно быть стены/объекта.
+      if (!this.hasPickupLineOfSight(pickupPosition)) {
+        continue;
+      }
+
+      distance = d;
+      nearest = pickup;
     }
 
     return nearest;
+  }
+
+  private isPickupInView(position: Vector3) {
+    const camera = this.player.camera;
+
+    const screen = Vector3.Project(
+      position,
+      Matrix.Identity(),
+      this.scene.getTransformMatrix(),
+      camera.viewport.toGlobal(
+        this.scene.getEngine().getRenderWidth(),
+        this.scene.getEngine().getRenderHeight(),
+      ),
+    );
+
+    const width =
+      this.scene.getEngine().getRenderWidth();
+
+    const height =
+      this.scene.getEngine().getRenderHeight();
+
+    return (
+      screen.z >= 0 &&
+      screen.z <= 1 &&
+      screen.x >= 0 &&
+      screen.x <= width &&
+      screen.y >= 0 &&
+      screen.y <= height
+    );
+  }
+
+  private hasPickupLineOfSight(
+    position: Vector3,
+  ) {
+    const ray =
+      this.player.getEyeRay(
+        Vector3.Distance(
+          this.player.getWorldPosition(),
+          position,
+        ),
+      );
+
+    const direction =
+      position.subtract(ray.origin);
+
+    const distance = direction.length();
+
+    if (distance < 0.01) {
+      return true;
+    }
+
+    const hit =
+      this.scene.pickWithRay(
+        new Ray(
+          ray.origin,
+          direction.normalize(),
+          distance,
+        ),
+        (mesh) =>
+          mesh.isVisible &&
+          mesh.isEnabled() &&
+          mesh.isPickable &&
+          !mesh.metadata?.weaponPickup &&
+          !mesh.metadata?.npc &&
+          !mesh.metadata?.monster &&
+          !mesh.metadata?.player,
+      );
+
+    return !hit?.hit;
   }
 
   private rebuildHeldModel() {
@@ -1075,11 +1163,10 @@ export class Weapon {
     from: Vector3,
     to: Vector3,
   ) {
-    const direction =
-      to.subtract(from);
+    const W = CONFIG.weapon.railgun;
 
-    const length =
-      direction.length();
+    const direction = to.subtract(from);
+    const length = direction.length();
 
     if (length < 0.01) {
       return;
@@ -1087,44 +1174,76 @@ export class Weapon {
 
     direction.normalize();
 
-    let right =
-      Vector3.Cross(
-        direction,
-        Vector3.Up(),
-      );
+    let right = Vector3.Cross(
+      direction,
+      Vector3.Up(),
+    );
 
-    if (
-      right.lengthSquared() <
-      0.0001
-    ) {
-      right =
-        Vector3.Cross(
-          direction,
-          Vector3.Right(),
-        );
+    if (right.lengthSquared() < 0.0001) {
+      right = Vector3.Cross(
+        direction,
+        Vector3.Right(),
+      );
     }
 
     right.normalize();
 
-    const up =
-      Vector3.Cross(
-        right,
-        direction,
-      ).normalize();
+    const up = Vector3.Cross(
+      right,
+      direction,
+    ).normalize();
 
-    const segments = 24;
-    const turns = 4;
-    const radius = 0.10;
+    /*
+    * Главное отличие:
+    * число витков зависит от длины луча,
+    * а не наоборот.
+    */
+    const pitch =
+      W.trailPitch ?? 0.65;
+
+    const turns = Math.max(
+      1,
+      length / pitch,
+    );
+
+    const segmentsPerTurn =
+      W.trailSegmentsPerTurn ?? 8;
+
+    const segments = Math.max(
+      12,
+      Math.ceil(
+        turns * segmentsPerTurn,
+      ),
+    );
+
+    const radius =
+      W.trailRadius ?? 0.10;
 
     const points: Vector3[] = [];
 
-    for (
-      let i = 0;
-      i <= segments;
-      i++
-    ) {
-      const t =
-        i / segments;
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+
+      const distanceAlongBeam =
+        length * t;
+
+      // Фиксированный шаг спирали:
+      // каждые pitch метров — полный оборот.
+      const angle =
+        (distanceAlongBeam / pitch) *
+        Math.PI *
+        2;
+
+      /*
+      * Небольшое затухание у начала и конца,
+      * чтобы спираль красиво сходилась.
+      */
+      // const endFade =
+      //   Math.sin(Math.PI * t);
+
+      // const currentRadius =
+      //   radius * endFade;
+      const currentRadius = radius;
 
       const center =
         Vector3.Lerp(
@@ -1132,17 +1251,6 @@ export class Weapon {
           to,
           t,
         );
-
-      const angle =
-        t *
-        Math.PI *
-        2 *
-        turns;
-
-      const currentRadius =
-        Math.sin(
-          Math.PI * t,
-        ) * radius;
 
       points.push(
         center
@@ -1182,19 +1290,16 @@ export class Weapon {
 
     this.railTrails.push({
       mesh,
-      life: 0.28,
-      duration: 0.28,
+      life: W.trailDuration ?? 0.28,
+      duration: W.trailDuration ?? 0.28,
     });
 
-    // Яркое центральное ядро луча.
+    // Центральная линия.
     const core =
       MeshBuilder.CreateLines(
         `railgun_core_${Date.now()}`,
         {
-          points: [
-            from,
-            to,
-          ],
+          points: [from, to],
         },
         this.scene,
       );
@@ -1214,6 +1319,35 @@ export class Weapon {
       life: 0.20,
       duration: 0.20,
     });
+  }
+
+  private updateRailgunGlow() {
+    if (this.activeType !== "RAILGUN") {
+      return;
+    }
+
+    const ready = this.cooldown <= 0;
+
+    const glowColor = ready
+      ? new Color3(0.05, 0.7, 0.95)   // готов
+      : new Color3(1.0, 0.03, 0.02);   // перезарядка
+
+    const glowPower = ready ? 0.55 : 0.45;
+
+    for (const mesh of this.root.getChildMeshes()) {
+      if (
+        mesh.name.startsWith("rail_coil_")
+      ) {
+        const material = mesh.material;
+
+        if (
+          material instanceof StandardMaterial
+        ) {
+          material.emissiveColor =
+            glowColor.scale(glowPower);
+        }
+      }
+    }
   }
 
   private explodeRocket(
@@ -1437,9 +1571,10 @@ export class Weapon {
 
   fireHeld() {
     if (
-      this.activeType === "MACHINE_GUN"
+      this.activeType === "MACHINE_GUN" ||
+      this.activeType === "QUAD_SHOTGUN"
     ) {
       this.fire();
     }
-}
+  }
 }

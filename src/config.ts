@@ -45,7 +45,7 @@ export const CONFIG = {
 
   weapon: {
     // Радиус поиска оружия стал меньше.
-    pickupRange: 1.35,
+    pickupRange: 1.7,
 
     shotgun: {
       pellets: 8,
@@ -65,10 +65,10 @@ export const CONFIG = {
     },
 
     quadShotgun: {
-      pellets: 4,
+      pellets: 6,
       damage: 28,
-      spread: 0.055,
-      cooldown: 0.95,
+      spread: 0.085,
+      cooldown: 0.75,
       range: 42,
       recoil: 0.038,
     },
@@ -100,38 +100,42 @@ export const CONFIG = {
     },
 
     railgun: {
-      damage: 240,
+      damage: 200,
       range: 80,
-      cooldown: 1.7,
+      cooldown: 1.5,
       recoil: 0.055,
       maxTargets: 6,
 
       // Q2-подобный спиральный след.
-      trailDuration: 0.12,
-      trailRadius: 0.11,
-      trailSegments: 22,
-      trailTurns: 3.5,
+      trailDuration: 0.24,
+      trailRadius: 0.12,
+      trailPitch: 0.45,
+      trailSegmentsPerTurn: 8,
     },
 
     pickups: {
       1: {
         type: "MACHINE_GUN",
-        position: [-7.0, 5.2],
+        position: [4, -6],
+        height: 0.7, // на паллете
       },
 
       2: {
         type: "QUAD_SHOTGUN",
         position: [-7.0, 5.2],
+        height: 0.45, // обычный пол
       },
 
       3: {
         type: "ROCKET_LAUNCHER",
         position: [4.8, 5.7],
+        height: 0.45, // обычный пол
       },
 
       4: {
         type: "RAILGUN",
         position: [-5.5, -5.3],
+        height: 0.45, // обычный пол
       },
     },
   },
