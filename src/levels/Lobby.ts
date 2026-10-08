@@ -34,6 +34,9 @@ export function buildLobby(scene: Scene) {
   add("crate", "crate_a", [1.2, 1.2, 1.2], [7.5, 0.6, -5.5]);
   add("crate", "crate_b", [1.2, 1.2, 1.2], [8.8, 0.6, -5.5]);
   add("crate", "crate_c", [1.2, 1.2, 1.2], [8.1, 1.8, -5.5]);
+  add("crate", "crate_a1", [1.2, 1.2, 1.2], [-7.5, 0.6, 4.5]);
+  add("crate", "crate_b1", [1.2, 1.2, 1.2], [-8.8, 0.6, 5.5]);
+  add("crate", "crate_c1", [1.2, 1.2, 1.2], [-8.1, 1.8, 4.5]);
 
   // Свет: тусклый общий + две лампы (вместе с лампой кабины — 4 источника).
   const hemi = new HemisphericLight("ambient", new Vector3(0, 1, 0), scene);

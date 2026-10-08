@@ -129,18 +129,73 @@ export class Elevator {
       case "EMERGENCY_CRASHED": this.updateShake(dt); break;
     }
 
-    const travelling = this.state === "MOVING" && this.selected !== null;
+    const travelling =
+    this.state === "MOVING" &&
+    this.selected !== null;
+
     const shown = travelling
-      ? (this.selected === CONFIG.lava.floor ? CONFIG.lava.floor : Math.round(this.root.position.y / E.floorHeight))
+      ? (
+          this.selected === CONFIG.lava.floor
+            ? CONFIG.lava.floor
+            : Math.round(
+                this.root.position.y /
+                E.floorHeight,
+              )
+        )
       : this.floor;
-    const dir = travelling ? Math.sign(this.selected! * E.floorHeight - this.root.position.y) : 0;
-    const alarm = this.state === "OVERLOADED";
-    const emergency = this.state === "EMERGENCY_WAIT" || this.state === "EMERGENCY_BREAK" || this.state === "EMERGENCY_FALL" || this.state === "EMERGENCY_CRASHED";
-    const flashOn = Math.floor(this.time * 4.5) % 2 === 0;
-    const glitchTick = Math.floor(this.time * 12);
-    this.emergencyLight.intensity = emergency ? (flashOn ? 4.8 : 0.35) : 0;
-    this.panel.setBoard(this.weight, E.weightLimit, alarm, Math.floor(this.time * 2.5) % 2 === 0, String(shown), dir, emergency, glitchTick);
-    this.checkVoid();
+
+    const dir = travelling
+      ? Math.sign(
+          this.selected! * E.floorHeight -
+          this.root.position.y,
+        )
+      : 0;
+
+    const alarm =
+      this.state === "OVERLOADED";
+
+    const emergency =
+      this.state === "EMERGENCY_WAIT" ||
+      this.state === "EMERGENCY_BREAK" ||
+      this.state === "EMERGENCY_FALL" ||
+      this.state === "EMERGENCY_CRASHED";
+
+    const flashOn =
+      Math.floor(this.time * 4.5) % 2 === 0;
+
+    const overloadButtonFlash =
+      Math.floor(this.time * 4.5) % 2 === 0;
+
+    const glitchTick =
+      Math.floor(this.time * 18) % 7;
+      
+    if (this.state === "OVERLOADED") {
+      this.panel.setOverloadButton(
+        this.selected,
+        overloadButtonFlash,
+      );
+    } else {
+      this.panel.setSelected(
+        this.selected,
+      );
+    }
+
+    this.emergencyLight.intensity =
+      emergency
+        ? (flashOn ? 4.8 : 0.35)
+        : 0;
+
+    this.panel.setBoard(
+      this.weight,
+      E.weightLimit,
+      alarm,
+      Math.floor(this.time * 2.5) % 2 === 0,
+      String(shown),
+      dir,
+      emergency,
+      glitchTick,
+    );
+      this.checkVoid();
   }
 
   private updateClosing(E: typeof CONFIG.elevator) {

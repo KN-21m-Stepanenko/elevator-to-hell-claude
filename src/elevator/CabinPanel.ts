@@ -65,15 +65,47 @@ export class CabinPanel {
     add("stop", "СТОП", bottom.length, 1, 4 - bottom.length);
   }
 
-  private drawButton(key: ButtonKey, lit: boolean) {
-    const b = this.btn.get(key)!, c = b.ctx, stop = key === "stop";
-    c.fillStyle = stop ? (lit ? "#ff5a48" : "#b01810") : lit ? "#ffd060" : "#2a2a2e";
+  private drawButton(
+    key: ButtonKey,
+    lit: boolean,
+    overloaded = false,
+    overloadFlash = false,
+  ) {
+    const b = this.btn.get(key)!;
+    const c = b.ctx;
+    const stop = key === "stop";
+
+    let background: string;
+    let text: string;
+
+    if (stop) {
+      background = lit ? "#ff5a48" : "#b01810";
+      text = "#ffffff";
+    } else if (overloaded) {
+      // Перегрузка: выбранная кнопка мигает красным.
+      background = overloadFlash
+        ? "#ff2b1f"
+        : "#521713";
+
+      text = "#ffffff";
+    } else {
+      background = lit ? "#ffd060" : "#2a2a2e";
+      text = lit ? "#201000" : "#d8d0b0";
+    }
+
+    c.fillStyle = background;
     c.fillRect(0, 0, b.w, 64);
-    c.strokeStyle = "#0c0c0c"; c.lineWidth = 5; c.strokeRect(2, 2, b.w - 4, 60);
-    c.fillStyle = stop ? "#ffffff" : lit ? "#201000" : "#d8d0b0";
-    c.textAlign = "center"; c.textBaseline = "middle";
+
+    c.strokeStyle = "#0c0c0c";
+    c.lineWidth = 5;
+    c.strokeRect(2, 2, b.w - 4, 60);
+
+    c.fillStyle = text;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
     c.font = `bold ${stop ? 26 : 32}px "Courier New", monospace`;
     c.fillText(b.label, b.w / 2, 34);
+
     b.tex.update();
   }
 
@@ -82,6 +114,23 @@ export class CabinPanel {
     for (const k of this.btn.keys()) if (k !== "stop") this.drawButton(k, k === sel);
   }
 
+  /** Мигающая красная подсветка кнопки выбранного этажа при перегрузке. */
+  setOverloadButton(
+    selected: number | null,
+    flashOn: boolean,
+  ) {
+    for (const k of this.btn.keys()) {
+      if (k === "stop") continue;
+
+      this.drawButton(
+        k,
+        k === selected,
+        k === selected,
+        flashOn,
+      );
+    }
+  }
+  
   /**
    * Табло: слева текущий этаж и стрелка движения, справа вес.
    * Вес зелёный при ≤ лимита, красный при перегрузе; alarm — мигающая надпись после нажатия этажа.

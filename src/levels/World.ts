@@ -29,9 +29,13 @@ const THEMES: Record<number, Theme> = {
     props: (b) => {
       b.box("concrete", "pillar_a", [1, 4, 1], [-5, 2, -2]);
       b.box("concrete", "pillar_b", [1, 4, 1], [5, 2, -2]);
+      b.box("concrete", "pillar_b", [1, 4, 1], [5, 2, 4]);
       b.box("crate", "crate_a", CRATE, [7.5, 0.6, -5.5]);
       b.box("crate", "crate_b", CRATE, [8.8, 0.6, -5.5]);
       b.box("crate", "crate_c", CRATE, [8.1, 1.8, -5.5]);
+      b.box("crate", "crate_a1", CRATE, [-7.5, 0.6, 4.5]);
+      b.box("crate", "crate_b1", CRATE, [-8.8, 0.6, 5.5]);
+      b.box("crate", "crate_c1", CRATE, [-8.1, 1.8, 5.0]);
     },
   },
   1: {

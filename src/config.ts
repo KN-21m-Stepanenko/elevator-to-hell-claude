@@ -74,10 +74,10 @@ export const CONFIG = {
     },
 
     rocketLauncher: {
-      directDamage: 170,
+      directDamage: 200,
 
       // Увеличил урон по площади.
-      splashDamage: 120,
+      splashDamage: 170,
 
       // Большой радиус взрыва.
       explosionRadius: 3.0,
@@ -85,7 +85,7 @@ export const CONFIG = {
       // Радиус proximity fuse.
       // Ракета взорвётся ещё до прямого контакта
       // с монстром, если пройдёт достаточно близко.
-      proximityFuseRadius: 1.8,
+      proximityFuseRadius: 2.0,
 
       cooldown: 1.25,
       projectileSpeed: 18,
