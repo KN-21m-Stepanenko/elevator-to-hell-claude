@@ -1,8 +1,10 @@
-import { Color3, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Color3, Mesh, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Npc } from "../npc/Npc";
 import type { Player } from "../player/Player";
 import { DamageTarget, horizontalDistance, Monster, randomFloat } from "./Monster";
+import type { NavGrid, Point } from "./NavGrid";
+import type { ThrowRequest, Thrower } from "./GrenadeDirector";
 
 export type WalkerState = "CHASE" | "ATTACK" | "DEAD";
 
@@ -14,6 +16,7 @@ interface Rig {
   hips: TransformNode; spine: TransformNode; neck: TransformNode;
   thighL: TransformNode; thighR: TransformNode; kneeL: TransformNode; kneeR: TransformNode;
   armL: TransformNode; armR: TransformNode; elbowL: TransformNode; elbowR: TransformNode;
+  grenade: Mesh; // граната в руке во время замаха
 }
 
 /**
@@ -22,7 +25,7 @@ interface Rig {
  * и рюкзаком, голова с рогами и светящимися глазами, руки с локтями и когтями.
  * Анимации: покой (дыхание, осмотр), ходьба (шаг, раскачка, подпрыгивание), атака, реакция на попадание, смерть.
  */
-export class WalkerMonster extends Monster {
+export class WalkerMonster extends Monster implements Thrower {
   state: WalkerState = "CHASE";
   private attackTimer = randomFloat(0.2, CONFIG.monsters.walker.attackCooldown);
   private attackProgress = -1;
@@ -36,12 +39,28 @@ export class WalkerMonster extends Monster {
   private readonly player: Player;
   private readonly npcs: Npc[];
   private readonly rig: Rig;
+  private readonly nav: NavGrid;
+  /** Текущая цель и место вокруг неё (раздаёт AttackSlots, чтобы монстры не сбивались в кучу). */
+  currentTarget: DamageTarget | null = null;
+  slot: Point | null = null;
+  private throwReq: ThrowRequest | null = null;
+  private throwT = -1;
+  private throwReleased = false;
+  private path: Point[] = [];   // обход препятствий: путь A* до цели
+  private repath = 0;
+  private goal: Point = { x: 1e9, z: 1e9 };
+  private stuckT = 0;
+  private lastX = 0;
+  private lastZ = 0;
 
-  constructor(scene: Scene, position: Vector3, floor: number, player: Player, npcs: Npc[], color: Color3) {
+  constructor(scene: Scene, position: Vector3, floor: number, player: Player, npcs: Npc[], color: Color3, nav: NavGrid) {
     // Лёжа тело опирается на спину/грудь, поэтому труп приподнят над полом.
     super(scene, "walker", position, CONFIG.monsters.walker.hp, position.y + 0.36);
     this.player = player;
     this.npcs = npcs;
+    this.nav = nav;
+    this.lastX = position.x;
+    this.lastZ = position.z;
     this.rig = this.buildRig(color);
   }
 
@@ -100,10 +119,12 @@ export class WalkerMonster extends Monster {
       return { shoulder, elbow };
     };
     const aL = arm(-1), aR = arm(1);
+    const grenade = part("held_grenade", [0.17, 0.17, 0.17], [0, -0.6, 0.12], new Color3(0.24, 0.3, 0.12), aR.elbow, false, new Color3(0.08, 0.1, 0.04));
+    grenade.setEnabled(false);
 
     return {
       hips, spine, neck, thighL: L.thigh, thighR: R.thigh, kneeL: L.knee, kneeR: R.knee,
-      armL: aL.shoulder, armR: aR.shoulder, elbowL: aL.elbow, elbowR: aR.elbow,
+      armL: aL.shoulder, armR: aR.shoulder, elbowL: aL.elbow, elbowR: aR.elbow, grenade,
     };
   }
 
@@ -127,6 +148,10 @@ export class WalkerMonster extends Monster {
   }
 
   protected die() {
+    if (this.throwReq && !this.throwReleased) this.throwReq.fail();
+    this.throwReq = null;
+    this.throwT = -1;
+    this.rig.grenade.setEnabled(false);
     super.die();
     this.attackProgress = -1;
     this.attackSwing = 0;
@@ -136,6 +161,11 @@ export class WalkerMonster extends Monster {
   /** Поведение: выбор цели, преследование, атака. Выставляет this.moving для анимации. */
   private think(dt: number) {
     const target = this.findTarget();
+    this.currentTarget = target;
+    if (this.throwT >= 0) {
+      this.updateThrow(dt);
+      return;
+    }
     if (!target) {
       this.attackSwing = 0;
       return;
@@ -164,21 +194,118 @@ export class WalkerMonster extends Monster {
     const len = Math.hypot(dx, dz);
     if (len < 0.01) return;
 
-    const desiredGap = CONFIG.monsters.walker.radius + 0.45;
-    const step = Math.min(CONFIG.monsters.walker.speed * dt, Math.max(0, len - desiredGap));
+    // Идём в свой слот вокруг цели (если он назначен), иначе прямо к цели.
+    const goal = this.slot ?? { x: to.x, z: to.z };
+    const goalVec = new Vector3(goal.x, to.y, goal.z);
+    const goalDist = Math.hypot(goal.x - from.x, goal.z - from.z);
+    const desiredGap = this.slot ? 0.2 : CONFIG.monsters.walker.radius + 0.45;
+    const step = Math.min(CONFIG.monsters.walker.speed * dt, Math.max(0, (this.slot ? goalDist : len) - desiredGap));
     if (step <= 0) {
       this.separate();
       this.face(to, dt);
       return;
     }
-    const tx = this.root.position.x + (dx / len) * step;
-    const tz = this.root.position.z + (dz / len) * step;
+    // Идём по прямой, если путь свободен, иначе по маршруту вокруг препятствий.
+    const steer = this.steerPoint(from, goalVec, dt);
+    const sx = steer.x - from.x, sz = steer.z - from.z, sl = Math.hypot(sx, sz) || 1;
+    const tx = this.root.position.x + (sx / sl) * step;
+    const tz = this.root.position.z + (sz / sl) * step;
     this.moveGround(tx, tz, CONFIG.monsters.walker.radius, CONFIG.monsters.walker.bodyHeight);
     this.moving = true;
+    this.watchStuck(dt);
 
     this.clampToRoom();
     this.separate();
-    this.face(to, dt);
+    this.face(new Vector3(steer.x, 0, steer.z), dt);
+  }
+
+  /** Точка, к которой идти сейчас: цель, если путь прямой свободен, иначе очередная вершина маршрута. */
+  private steerPoint(from: Vector3, to: Vector3, dt: number): Point {
+    if (this.nav.lineFree(from.x, from.z, to.x, to.z)) {
+      this.path.length = 0;
+      this.goal = { x: 1e9, z: 1e9 };
+      return to;
+    }
+    this.repath -= dt;
+    if (this.repath <= 0 || Math.hypot(to.x - this.goal.x, to.z - this.goal.z) > 1.0) {
+      this.repath = 0.4 + Math.random() * 0.2;
+      this.goal = { x: to.x, z: to.z };
+      this.path = this.nav.findPath(from.x, from.z, to.x, to.z) ?? [];
+    }
+    while (this.path.length && Math.hypot(this.path[0].x - from.x, this.path[0].z - from.z) < 0.4) this.path.shift();
+    return this.path[0] ?? to;
+  }
+
+  /** Если монстр почти не продвигается, сбрасываем маршрут и строим заново. */
+  private watchStuck(dt: number) {
+    this.stuckT += dt;
+    if (this.stuckT < 0.6) return;
+    const p = this.root.position;
+    if (Math.hypot(p.x - this.lastX, p.z - this.lastZ) < 0.2) { this.repath = 0; this.path.length = 0; }
+    this.lastX = p.x; this.lastZ = p.z; this.stuckT = 0;
+  }
+
+  // ----- Гранаты: интерфейс для GrenadeDirector -----
+  canThrow(): boolean {
+    if (!this.alive || this.throwT >= 0 || this.attackProgress >= 0) return false;
+    const t = this.currentTarget;
+    return !t || horizontalDistance(this.getWorldPosition(), t.getWorldPosition()) > CONFIG.monsters.walker.attackRange * 1.3;
+  }
+
+  /** Точка, откуда вылетает граната: на уровне поднятой руки, чуть впереди монстра. */
+  getThrowOrigin(): Vector3 {
+    const p = this.getWorldPosition(), yaw = this.root.rotation.y;
+    return new Vector3(p.x + Math.sin(yaw) * 0.35, p.y + 1.9, p.z + Math.cos(yaw) * 0.35);
+  }
+
+  startThrow(req: ThrowRequest): boolean {
+    if (!this.canThrow()) return false;
+    this.throwReq = req;
+    this.throwT = 0;
+    this.throwReleased = false;
+    return true;
+  }
+
+  private updateThrow(dt: number) {
+    const G = CONFIG.grenade, req = this.throwReq!;
+    this.throwT += dt;
+    this.state = "ATTACK";
+    this.face(new Vector3(req.target.x, 0, req.target.z), dt);
+    if (!this.throwReleased && this.throwT >= G.windup) {
+      this.throwReleased = true;
+      const hand = this.getThrowOrigin();
+      const plan = req.plan(hand);
+      if (plan) req.launch(hand, plan); else req.fail();
+    }
+    if (this.throwT >= G.throwDuration) {
+      this.throwT = -1;
+      this.throwReq = null;
+      this.attackTimer = Math.max(this.attackTimer, 0.6);
+    }
+  }
+
+  /** Поза правой руки и корпуса при броске: замах за голову, бросок вперёд, возврат. */
+  private applyThrowPose() {
+    const G = CONFIG.grenade, r = this.rig;
+    const wu = clamp01(this.throwT / G.windup);
+    const rel = clamp01((this.throwT - G.windup) / (G.throwDuration - G.windup));
+    let arm: number, elbow: number, twist: number, lean: number;
+    if (this.throwT < G.windup) {
+      arm = -3.4 * smooth(wu); elbow = -1.0 * smooth(wu); twist = 0.4 * smooth(wu); lean = -0.25 * smooth(wu);
+    } else {
+      const fwd = smooth(clamp01(rel * 2.5)), back = smooth(clamp01((rel - 0.4) / 0.6));
+      arm = (-3.4 + 2.4 * fwd) * (1 - back);
+      elbow = (-1.0 + 0.8 * fwd) * (1 - back);
+      twist = (0.4 - 0.8 * fwd) * (1 - back);
+      lean = (-0.25 + 0.55 * fwd) * (1 - back);
+    }
+    r.armR.rotation.x = arm;
+    r.armR.rotation.z = 0.1;
+    r.elbowR.rotation.x = elbow;
+    r.spine.rotation.y = twist;
+    r.spine.rotation.x = 0.04 + lean;
+    r.armL.rotation.x = 0.5 * wu * (1 - rel); // левая рука уравновешивает
+    r.grenade.setEnabled(!this.throwReleased);
   }
 
   private separate() {
@@ -258,6 +385,9 @@ export class WalkerMonster extends Monster {
     const bend = -0.3 - 0.25 * w * Math.abs(sL) - 0.5 * a;
     r.elbowL.rotation.x = bend;
     r.elbowR.rotation.x = bend;
+
+    if (this.throwT >= 0) this.applyThrowPose();
+    else r.grenade.setEnabled(false);
   }
 
   // ----- Смерть: ноги подгибаются, руки и голова запрокидываются, затем тело заваливается -----

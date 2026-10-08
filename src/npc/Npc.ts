@@ -40,6 +40,10 @@ export class Npc {
   private tl = { x: 0, z: -2.1 }; // цель метаний внутри кабины (локально)
   private tw = { x: 0, z: 0 };    // динамическая цель убегания (мировая)
   private fleeSeed = Math.random() * Math.PI * 2;
+  private arms: TransformNode[] = [];
+  private moving = false;
+  private armT = Math.random() * 10;
+  private runPhase = 0;
   /** У каждого NPC своя полоса бегства, чтобы группа не стекалась в одну точку. */
   private readonly fleeLane = rf(-1.15, 1.15);
 
@@ -52,11 +56,11 @@ export class Npc {
     const k = 0.85 + ((weight - 60) / 40) * 0.3; // полнее — шире
     this.root.scaling.set(k, 1, k);
 
-    const part = (n: string, w: number, h: number, d: number, p: number[], c: Color3, collide: boolean) => {
+    const part = (n: string, w: number, h: number, d: number, p: number[], c: Color3, collide: boolean, parent: TransformNode = this.root) => {
       const m = new StandardMaterial("npc_mat", scene);
       m.diffuseColor = c; m.specularColor = BLACK;
       const b = MeshBuilder.CreateBox(n, { width: w, height: h, depth: d }, scene);
-      b.parent = this.root; b.position.set(p[0], p[1], p[2]); b.material = m; b.checkCollisions = collide;
+      b.parent = parent; b.position.set(p[0], p[1], p[2]); b.material = m; b.checkCollisions = collide;
       b.metadata = { npc: this };
       this.mats.push(m); this.parts.push(b); this.baseColors.push(c);
     };
@@ -64,6 +68,18 @@ export class Npc {
     part("npc_torso", 0.5, 0.6, 0.3, [0, 1.1, 0], color, true);
     part("npc_head", 0.26, 0.28, 0.26, [0, 1.54, 0], new Color3(0.75, 0.58, 0.45), false);
     part("npc_visor", 0.2, 0.06, 0.03, [0, 1.58, 0.14], new Color3(0.05, 0.05, 0.08), false); // «лицо» — спереди (+z)
+
+    // Руки в том же блочном стиле: рукав цвета куртки (чуть темнее) и кисть цвета лица.
+    // Каждая рука висит на «плечевом» узле, чтобы её можно было качать при беге и поднимать в панике.
+    const skin = new Color3(0.75, 0.58, 0.45), sleeve = color.scale(0.8);
+    for (const s of [-1, 1]) {
+      const shoulder = new TransformNode("npc_shoulder", scene);
+      shoulder.parent = this.root;
+      shoulder.position.set(s * 0.31, 1.38, 0);
+      part("npc_arm", 0.12, 0.5, 0.14, [0, -0.22, 0], sleeve, false, shoulder);
+      part("npc_hand", 0.1, 0.1, 0.12, [0, -0.5, 0.01], skin, false, shoulder);
+      this.arms.push(shoulder);
+    }
   }
 
   /** Паника от событий (лава, обрыв тросов, монстры): ничем не снимается. */
@@ -95,6 +111,7 @@ export class Npc {
     const dur = this.deathCause === "weapon" ? 0.35 : 0.5;
     this.fall = Math.min(1, this.fall + dt / dur);
     this.root.rotation.x = this.fall * (Math.PI / 2);
+    this.arms.forEach((a, i) => { a.rotation.x = -0.4 * this.fall; a.rotation.z = (i === 0 ? -1 : 1) * 0.9 * this.fall; });
 
     if (this.deathCause === "lava" && this.deathT < 1.6) {
       const k = Math.max(0, 1 - this.deathT / 1.4), c = Math.min(1, this.deathT / 1.2);
@@ -124,6 +141,7 @@ export class Npc {
   update(dt: number, frozen = false) {
     if (this.state === "DEAD") { this.updateDeath(dt); return; }
     if (frozen) return;
+    this.moving = false;
     this.flash = Math.max(0, this.flash - dt);
     this.setFlash(this.flash > 0);
 
@@ -139,6 +157,23 @@ export class Npc {
     if (this.state === "PANIC") this.runAround(dt); else this.idle(dt);
     this.separate();
     this.constrain();
+    this.animateArms(dt);
+  }
+
+  /** Руки: в покое чуть покачиваются, при беге машут в противофазе, в панике на месте — вскинуты и дрожат. */
+  private animateArms(dt: number) {
+    this.armT += dt;
+    if (this.moving) this.runPhase += dt * 12;
+    const k = Math.min(1, dt * 14), panic = this.state === "PANIC";
+    this.arms.forEach((a, i) => {
+      const s = i === 0 ? -1 : 1;
+      let x: number, z: number;
+      if (panic && this.moving) { x = Math.sin(this.runPhase + (i ? Math.PI : 0)) * 0.95; z = s * 0.12; }
+      else if (panic) { x = -2.1 + Math.sin(this.armT * 14 + i * 2) * 0.35; z = s * 0.35; }
+      else { x = Math.sin(this.armT * 1.3 + i * 1.7) * 0.05; z = s * 0.05; }
+      a.rotation.x += (x - a.rotation.x) * k;
+      a.rotation.z += (z - a.rotation.z) * k;
+    });
   }
 
   private setFlash(on: boolean) {
@@ -255,6 +290,7 @@ export class Npc {
   private step(tx: number, tz: number, speed: number, dt: number) {
     const w = this.world(), dx = tx - w.x, dz = tz - w.z, d = Math.hypot(dx, dz);
     if (d < 0.05) return;
+    this.moving = true;
     const s = Math.min(speed * dt, d);
     this.setWorld(w.x + (dx / d) * s, w.z + (dz / d) * s);
     this.faceTo(Math.atan2(dx, dz), dt, 10);

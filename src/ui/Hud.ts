@@ -30,7 +30,7 @@ export class Hud {
     this.hint.classList.add("hidden");
     this.overlay.innerHTML = `
       <h1>${title}</h1>
-      <p>${subtitle}</p>
+      <p>"${subtitle}"</p>
       <button id="restartButton" type="button">Перезапустити гру</button>
     `;
     this.overlay.classList.remove("hidden");

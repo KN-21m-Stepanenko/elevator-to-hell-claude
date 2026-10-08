@@ -5,8 +5,12 @@ import { CONFIG } from "../config";
 import type { Npc } from "../npc/Npc";
 import type { Player } from "../player/Player";
 
+import { AttackSlots } from "./AttackSlots";
 import { FlyingMonster } from "./FlyingMonster";
+import { GrenadeDirector } from "./GrenadeDirector";
+import { GrenadeSystem } from "./Grenades";
 import { Monster, randomInt } from "./Monster";
+import { isAirFree, NavGrid, staticBoxes } from "./NavGrid";
 import { WalkerMonster } from "./WalkerMonster";
 
 const WALKER_COLORS = [
@@ -15,60 +19,6 @@ const WALKER_COLORS = [
   new Color3(0.28, 0.31, 0.38),
 ];
 
-const WALKER_SPAWN = [
-  [-6.5, -5.5], [0, -5.8], [6.5, -5.5],
-  [-7, 1.5], [7, 1.5], [-5, 5.2], [5, 5.2],
-];
-
-/**
- * Проверяет, можно ли безопасно поставить наземного монстра
- * в указанную точку без попадания внутрь статического объекта.
- */
-function isGroundSpawnFree(
-  scene: Scene,
-  position: Vector3,
-  radius: number,
-  height: number,
-) {
-  const minY = position.y + 0.05;
-  const maxY = position.y + height;
-
-  for (const mesh of scene.meshes) {
-    if (
-      !mesh.isEnabled() ||
-      !mesh.checkCollisions ||
-      mesh.metadata?.monster ||
-      mesh.metadata?.npc ||
-      mesh.metadata?.player
-    ) {
-      continue;
-    }
-
-    mesh.computeWorldMatrix(true);
-
-    const box = mesh.getBoundingInfo().boundingBox;
-
-    if (box.maximumWorld.y <= minY || box.minimumWorld.y >= maxY) continue;
-
-    const nx = Math.max(
-      box.minimumWorld.x,
-      Math.min(position.x, box.maximumWorld.x),
-    );
-
-    const nz = Math.max(
-      box.minimumWorld.z,
-      Math.min(position.z, box.maximumWorld.z),
-    );
-
-    const dx = position.x - nx;
-    const dz = position.z - nz;
-
-    if (dx * dx + dz * dz < radius * radius) return false;
-  }
-
-  return true;
-}
-
 /** Управляет волной монстров после прибытия лифта на боевой этаж. */
 export class MonsterManager {
   private monsters: Monster[] = [];
@@ -76,6 +26,13 @@ export class MonsterManager {
   private waveMonsters = new Map<number, Monster[]>();
   private victory = false;
   private frozen = false;
+  private activeFloor: number | null = null;
+  private readonly navs = new Map<number, NavGrid>();
+  private readonly slots = new AttackSlots();
+  private slotTimer = 0;
+  private readonly grenades: GrenadeSystem;
+  private readonly director: GrenadeDirector;
+  private doorOpen: () => boolean = () => false;
 
   onVictory: (floor: number) => void = () => {};
 
@@ -85,14 +42,36 @@ export class MonsterManager {
     private readonly npcs: Npc[],
     private readonly cabin: TransformNode,
     private readonly say: (text: string, ms?: number) => void,
-  ) {}
+  ) {
+    this.grenades = new GrenadeSystem(scene, player, npcs);
+    this.director = new GrenadeDirector(scene, player, cabin, this.grenades, say, () => this.doorOpen());
+  }
+
+  /** Открыты ли двери кабины на этаже: граната может залететь в лифт только через открытую дверь. */
+  setDoorOpenProvider(fn: () => boolean) {
+    this.doorOpen = fn;
+  }
 
   update(dt: number) {
+    if (!this.frozen) this.grenades.update(dt);
+
     for (const monster of this.monsters) {
       if (!this.frozen || !monster.alive) monster.update(dt);
     }
 
     this.monsters = this.monsters.filter((m) => m.alive || !m.deathFinished);
+
+    // Раздача мест вокруг целей и решения о бросках гранат — только пока идёт бой.
+    if (!this.frozen && !this.victory && this.activeFloor !== null) {
+      const wave = this.waveMonsters.get(this.activeFloor) ?? [];
+      this.slotTimer -= dt;
+      if (this.slotTimer <= 0) {
+        this.slotTimer = 0.3;
+        const nav = this.navs.get(this.activeFloor);
+        if (nav) this.slots.assign(wave.filter((m): m is WalkerMonster => m instanceof WalkerMonster), nav);
+      }
+      this.director.update(dt, this.activeFloor, wave);
+    }
 
     for (const [floor, group] of this.waveMonsters) {
       const aliveOnFloor = group.filter((m) => m.alive);
@@ -124,6 +103,8 @@ export class MonsterManager {
     }
 
     this.startedFloors.add(floor);
+    this.activeFloor = floor;
+    this.director.reset();
     this.npcs.forEach((n) => n.scare());
 
     const before = this.monsters.length;
@@ -137,125 +118,55 @@ export class MonsterManager {
     this.waveMonsters.set(floor, wave);
   }
 
+  /** Навигационная сетка этажа строится один раз, когда уровень уже собран. */
+  private navFor(floor: number) {
+    let nav = this.navs.get(floor);
+    if (!nav) {
+      const W = CONFIG.monsters.walker;
+      nav = new NavGrid(staticBoxes(this.scene), floor * CONFIG.elevator.floorHeight, W.radius + 0.12, W.bodyHeight);
+      this.navs.set(floor, nav);
+    }
+    return nav;
+  }
+
   private spawnWalking(floor: number) {
-    const count = randomInt(
-      CONFIG.monsters.walker.count[0],
-      CONFIG.monsters.walker.count[1],
-    );
-
-    const points = WALKER_SPAWN
-      .slice()
-      .sort(() => Math.random() - 0.5);
-
+    const count = randomInt(CONFIG.monsters.walker.count[0], CONFIG.monsters.walker.count[1]);
+    const nav = this.navFor(floor);
+    // Только свободные клетки, достижимые от лифта: не внутри объектов, не в замкнутых нишах.
+    const points = nav.pickSpawns(count, { x: 0, z: CONFIG.level.halfZ - 0.5 }, 6, 3.5);
     const y = floor * CONFIG.elevator.floorHeight;
-
-    const used: Vector3[] = [];
-
-    const addIfSafe = (x: number, z: number) => {
-      const position = new Vector3(x, y, z);
-
-      if (
-        !isGroundSpawnFree(
-          this.scene,
-          position,
-          CONFIG.monsters.walker.radius,
-          CONFIG.monsters.walker.bodyHeight,
-        )
-      ) {
-        return false;
-      }
-
-      // Не ставим нескольких монстров практически в одну точку.
-      if (
-        used.some(
-          (other) =>
-            Math.hypot(
-              position.x - other.x,
-              position.z - other.z,
-            ) < CONFIG.monsters.walker.radius * 2.4,
-        )
-      ) {
-        return false;
-      }
-
-      used.push(position);
-      return true;
-    };
-
-    // Сначала используем заданные точки, но только если они свободны.
-    for (const [x, z] of points) {
-      if (used.length >= count) break;
-      addIfSafe(x, z);
-    }
-
-    // Если какие-то штатные точки заняты объектами,
-    // добираем безопасные позиции случайным поиском.
-    let attempts = 0;
-
-    while (used.length < count && attempts < 80) {
-      attempts++;
-
-      const x =
-        (Math.random() * 2 - 1) *
-        (CONFIG.level.halfX - CONFIG.monsters.walker.radius - 0.7);
-
-      const z =
-        (Math.random() * 2 - 1) *
-        (CONFIG.level.halfZ - CONFIG.monsters.walker.radius - 0.7);
-
-      addIfSafe(x, z);
-    }
-
-    // Для каждого найденного места создаём монстра.
-    used.forEach((position, i) => {
-      this.monsters.push(
-        new WalkerMonster(
-          this.scene,
-          position,
-          floor,
-          this.player,
-          this.npcs,
-          WALKER_COLORS[i % WALKER_COLORS.length],
-        ),
-      );
+    points.forEach((p, i) => {
+      this.monsters.push(new WalkerMonster(
+        this.scene,
+        new Vector3(p.x + (Math.random() - 0.5) * 0.2, y, p.z + (Math.random() - 0.5) * 0.2),
+        floor,
+        this.player,
+        this.npcs,
+        WALKER_COLORS[i % WALKER_COLORS.length],
+        nav,
+      ));
     });
   }
 
   private spawnFlying() {
-    const count = randomInt(
-      CONFIG.monsters.flying.count[0],
-      CONFIG.monsters.flying.count[1],
-    );
-
+    const F = CONFIG.monsters.flying;
+    const count = randomInt(F.count[0], F.count[1]);
     const center = this.cabin.position.clone();
-    const baseY = center.y + CONFIG.monsters.flying.orbitHeight;
+    const baseY = center.y + F.orbitHeight;
+    const boxes = staticBoxes(this.scene);
 
     for (let i = 0; i < count; i++) {
-      const angle =
-        (Math.PI * 2 * i) / count + Math.random() * 0.35;
-
-      const radius =
-        CONFIG.monsters.flying.orbitRadiusMin +
-        Math.random() *
-          (CONFIG.monsters.flying.orbitRadiusMax -
-            CONFIG.monsters.flying.orbitRadiusMin);
-
-      const position = new Vector3(
-        center.x + Math.cos(angle) * radius,
-        baseY,
-        center.z + Math.sin(angle) * radius,
-      );
-
-      this.monsters.push(
-        new FlyingMonster(
-          this.scene,
-          position,
-          center,
-          this.player,
-          this.npcs,
-          new Color3(0.2 + i * 0.08, 0.22, 0.24),
-        ),
-      );
+      // Точка появления свободна от стен и предметов: при занятости сдвигаем угол и поднимаем выше.
+      let position = new Vector3();
+      for (let attempt = 0; attempt < 16; attempt++) {
+        const angle = (Math.PI * 2 * i) / count + Math.random() * 0.35 + attempt * 0.4;
+        const radius = F.orbitRadiusMin + Math.random() * (F.orbitRadiusMax - F.orbitRadiusMin);
+        position = new Vector3(center.x + Math.cos(angle) * radius, baseY + attempt * 0.4, center.z + Math.sin(angle) * radius);
+        if (isAirFree(boxes, position, 0.8)) break;
+      }
+      this.monsters.push(new FlyingMonster(
+        this.scene, position, center, this.player, this.npcs, new Color3(0.2 + i * 0.08, 0.22, 0.24),
+      ));
     }
   }
 

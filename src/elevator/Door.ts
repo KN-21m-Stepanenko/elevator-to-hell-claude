@@ -10,8 +10,10 @@ export class Door {
 
   constructor(scene: Scene, mats: Mats, name: string, private pos: number[], private width: number, private height: number, private parent?: TransformNode) {
     for (const s of [-1, 1]) {
-      this.panels.push(addBox(scene, mats, "metal", `${name}_${s}`, [width / 2, height, 0.08],
-        [pos[0] + (s * width) / 4, pos[1] + height / 2, pos[2]], parent));
+      const panel = addBox(scene, mats, "metal", `${name}_${s}`, [width / 2, height, 0.08],
+        [pos[0] + (s * width) / 4, pos[1] + height / 2, pos[2]], parent);
+      panel.metadata = { door: true }; // створки не участвуют в навигационной сетке
+      this.panels.push(panel);
     }
   }
 

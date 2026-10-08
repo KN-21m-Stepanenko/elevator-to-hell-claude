@@ -147,6 +147,8 @@ const finishVictory = (
   }, delay);
 };
 
+monsters.setDoorOpenProvider(() => elevator.exitOpen());
+
 elevator.onArrived = (floor) =>
   monsters.spawnForFloor(floor);
 
