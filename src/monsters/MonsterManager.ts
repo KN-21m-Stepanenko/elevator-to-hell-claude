@@ -33,6 +33,8 @@ export class MonsterManager {
   private readonly grenades: GrenadeSystem;
   private readonly director: GrenadeDirector;
   private doorOpen: () => boolean = () => false;
+  /** Откуда бросили гранату (для индикации на экране). */
+  onGrenadeThrown: (origin: Vector3) => void = () => {};
 
   onVictory: (floor: number) => void = () => {};
 
@@ -44,7 +46,8 @@ export class MonsterManager {
     private readonly say: (text: string, ms?: number) => void,
   ) {
     this.grenades = new GrenadeSystem(scene, player, npcs);
-    this.director = new GrenadeDirector(scene, player, cabin, this.grenades, say, () => this.doorOpen());
+    this.director = new GrenadeDirector(scene, player, cabin, this.grenades, () => this.doorOpen());
+    this.grenades.onLaunch = (origin) => this.onGrenadeThrown(origin);
   }
 
   /** Открыты ли двери кабины на этаже: граната может залететь в лифт только через открытую дверь. */
@@ -68,7 +71,7 @@ export class MonsterManager {
       if (this.slotTimer <= 0) {
         this.slotTimer = 0.3;
         const nav = this.navs.get(this.activeFloor);
-        if (nav) this.slots.assign(wave.filter((m): m is WalkerMonster => m instanceof WalkerMonster), nav);
+        if (nav) this.slots.assign(wave.filter((m): m is WalkerMonster => m instanceof WalkerMonster), nav, 0.3);
       }
       this.director.update(dt, this.activeFloor, wave);
     }
@@ -119,7 +122,7 @@ export class MonsterManager {
   }
 
   /** Навигационная сетка этажа строится один раз, когда уровень уже собран. */
-  private navFor(floor: number) {
+  navFor(floor: number) {
     let nav = this.navs.get(floor);
     if (!nav) {
       const W = CONFIG.monsters.walker;

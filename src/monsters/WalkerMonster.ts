@@ -4,7 +4,7 @@ import type { Npc } from "../npc/Npc";
 import type { Player } from "../player/Player";
 import { DamageTarget, horizontalDistance, Monster, randomFloat } from "./Monster";
 import type { NavGrid, Point } from "./NavGrid";
-import type { ThrowRequest, Thrower } from "./GrenadeDirector";
+import { isRobust, releaseThrow, ThrowRequest, Thrower } from "./GrenadeDirector";
 
 export type WalkerState = "CHASE" | "ATTACK" | "DEAD";
 
@@ -46,6 +46,8 @@ export class WalkerMonster extends Monster implements Thrower {
   private throwReq: ThrowRequest | null = null;
   private throwT = -1;
   private throwReleased = false;
+  private throwPoint: Point | null = null; // позиция броска на осевой линии этажа
+  private throwWalkT = 0;
   private path: Point[] = [];   // обход препятствий: путь A* до цели
   private repath = 0;
   private goal: Point = { x: 1e9, z: 1e9 };
@@ -162,7 +164,7 @@ export class WalkerMonster extends Monster implements Thrower {
   private think(dt: number) {
     const target = this.findTarget();
     this.currentTarget = target;
-    if (this.throwT >= 0) {
+    if (this.throwReq) {
       this.updateThrow(dt);
       return;
     }
@@ -247,7 +249,7 @@ export class WalkerMonster extends Monster implements Thrower {
 
   // ----- Гранаты: интерфейс для GrenadeDirector -----
   canThrow(): boolean {
-    if (!this.alive || this.throwT >= 0 || this.attackProgress >= 0) return false;
+    if (!this.alive || this.throwReq || this.attackProgress >= 0) return false;
     const t = this.currentTarget;
     return !t || horizontalDistance(this.getWorldPosition(), t.getWorldPosition()) > CONFIG.monsters.walker.attackRange * 1.3;
   }
@@ -260,26 +262,77 @@ export class WalkerMonster extends Monster implements Thrower {
 
   startThrow(req: ThrowRequest): boolean {
     if (!this.canThrow()) return false;
+    const point = this.pickThrowPoint(req);
+    if (!point) return false;
     this.throwReq = req;
-    this.throwT = 0;
+    this.throwPoint = point;
+    this.throwWalkT = 0;
+    this.throwT = -1; // сначала идём на позицию, затем замах
     this.throwReleased = false;
     return true;
   }
 
+  /**
+   * Для броска в лифт — точка на осевой линии комнаты напротив двери, подальше от стены
+   * (вблизи стены дуга упирается в косяк и стену). Для броска в укрытие — текущее место.
+   */
+  private pickThrowPoint(req: ThrowRequest): Point | null {
+    const here = this.getWorldPosition();
+    if (req.target.z < CONFIG.level.halfZ - 0.5) return req.plan(this.getThrowOrigin()) ? { x: here.x, z: here.z } : null;
+    // Сначала дальние позиции (8.5–12.5 м от двери), ближняя 6.5 м — только если дальних нет.
+    for (const group of [[8.5, 10.5, 12.5], [6.5]]) {
+      let best: Point | null = null, bestDist = Infinity;
+      for (const d of group) {
+        for (const jx of [0, -0.6, 0.6]) {
+          const p = { x: req.target.x + jx, z: CONFIG.level.halfZ - d };
+          if (!this.nav.freeAt(p.x, p.z)) continue;
+          if (!isRobust(req, new Vector3(p.x, here.y + 1.9, p.z + 0.35))) continue;
+          const dist = Math.hypot(p.x - here.x, p.z - here.z);
+          if (dist < bestDist) { bestDist = dist; best = p; }
+        }
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  /** Идёт к точке по маршруту с обходом препятствий; true — пришёл. */
+  private walkTo(goal: Point, speed: number, dt: number): boolean {
+    const from = this.getWorldPosition();
+    const d = Math.hypot(goal.x - from.x, goal.z - from.z);
+    if (d < 0.35) return true;
+    this.state = "CHASE";
+    const steer = this.steerPoint(from, new Vector3(goal.x, from.y, goal.z), dt);
+    const sx = steer.x - from.x, sz = steer.z - from.z, sl = Math.hypot(sx, sz) || 1, step = Math.min(speed * dt, d);
+    this.moveGround(this.root.position.x + (sx / sl) * step, this.root.position.z + (sz / sl) * step, CONFIG.monsters.walker.radius, CONFIG.monsters.walker.bodyHeight);
+    this.moving = true;
+    this.watchStuck(dt);
+    this.clampToRoom();
+    this.separate();
+    this.face(new Vector3(steer.x, 0, steer.z), dt);
+    return false;
+  }
+
   private updateThrow(dt: number) {
     const G = CONFIG.grenade, req = this.throwReq!;
+    if (this.throwT < 0) {
+      this.throwWalkT += dt;
+      if (this.walkTo(this.throwPoint!, CONFIG.monsters.walker.speed * 1.3, dt)) this.throwT = 0;
+      else if (this.throwWalkT > 12) { req.fail(); this.throwReq = null; this.throwPoint = null; }
+      return;
+    }
     this.throwT += dt;
     this.state = "ATTACK";
     this.face(new Vector3(req.target.x, 0, req.target.z), dt);
     if (!this.throwReleased && this.throwT >= G.windup) {
       this.throwReleased = true;
       const hand = this.getThrowOrigin();
-      const plan = req.plan(hand);
-      if (plan) req.launch(hand, plan); else req.fail();
+      releaseThrow(req, hand);
     }
     if (this.throwT >= G.throwDuration) {
       this.throwT = -1;
       this.throwReq = null;
+      this.throwPoint = null;
       this.attackTimer = Math.max(this.attackTimer, 0.6);
     }
   }
@@ -429,7 +482,9 @@ export class WalkerMonster extends Monster implements Thrower {
       if (Math.abs(p.y - this.root.position.y) < 2) candidates.push({ target: npc, pos: p });
     }
     if (!candidates.length) return null;
-    candidates.sort((a, b) => horizontalDistance(this.root.position, a.pos) - horizontalDistance(this.root.position, b.pos));
+    // Цели в лифте недостижимы: выбираем их, только если других нет.
+    const key = (c: { pos: Vector3 }) => horizontalDistance(this.root.position, c.pos) + (c.pos.z > CONFIG.level.halfZ - 0.3 ? 1000 : 0);
+    candidates.sort((a, b) => key(a) - key(b));
     return horizontalDistance(this.root.position, candidates[0].pos) <= CONFIG.monsters.walker.sightRange ? candidates[0].target : null;
   }
 

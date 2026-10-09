@@ -132,10 +132,10 @@ export function buildWeaponVisual(
     }
 
     case "MACHINE_GUN": {
-      box(scene, root, "mg_receiver", [0.18, 0.22, 0.52], [0, 0, 0], steel, Color3.Black(), firstPerson);
-      box(scene, root, "mg_barrel", [0.07, 0.07, 1.15], [0, 0.04, 0.76], darkSteel, Color3.Black(), firstPerson);
+      box(scene, root, "mg_receiver", [0.18, 0.22, 0.52], [0, 0, 0], darkSteel, Color3.Black(), firstPerson);
+      box(scene, root, "mg_barrel", [0.07, 0.07, 1.15], [0, 0.04, 0.76], steel, Color3.Black(), firstPerson);
       box(scene, root, "mg_handguard", [0.12, 0.12, 0.50], [0, -0.02, 0.46], black, Color3.Black(), firstPerson);
-      box(scene, root, "mg_magazine", [0.15, 0.30, 0.22], [0, -0.23, 0.04], black, Color3.Black(), firstPerson);
+      box(scene, root, "mg_magazine", [0.15, 0.30, 0.22], [0, -0.23, 0.04], steel, Color3.Black(), firstPerson);
       box(scene, root, "mg_stock", [0.10, 0.17, 0.35], [0, -0.08, -0.38], brown, Color3.Black(), firstPerson);
       box(scene, root, "mg_sight", [0.05, 0.09, 0.13], [0, 0.15, 0.10], steel, Color3.Black(), firstPerson);
       return { root, muzzleZ: 1.35 };

@@ -1,6 +1,7 @@
 import { Color3, Mesh, MeshBuilder, Ray, Scene, StandardMaterial, TransformNode, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
 import type { Elevator } from "../elevator/Elevator";
+import type { NavGrid, Point } from "../monsters/NavGrid";
 import type { Player } from "../player/Player";
 import type { Weapon } from "../player/Weapon";
 
@@ -9,7 +10,11 @@ const rf = (a: number, b: number) => a + Math.random() * (b - a);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const RED = new Color3(0.6, 0.05, 0.05), BLACK = Color3.Black();
 
-export interface NpcEnv { cabin: TransformNode; scene: Scene; player: Player; weapon: Weapon; elevator: Elevator; npcs: Npc[] }
+export interface NpcEnv {
+  cabin: TransformNode; scene: Scene; player: Player; weapon: Weapon; elevator: Elevator; npcs: Npc[];
+  /** Навигационная сетка этажа: по ней NPC выбирают места в открытой части комнаты и обходят предметы. */
+  nav?: (floor: number) => NavGrid | null;
+}
 export type NpcState = "CALM" | "PANIC" | "DEAD";
 export type DeathCause = "weapon" | "lava" | "impact" | "crush";
 const CHAR = new Color3(0.05, 0.04, 0.04);
@@ -39,6 +44,13 @@ export class Npc {
   private retarget = 0;
   private tl = { x: 0, z: -2.1 }; // цель метаний внутри кабины (локально)
   private tw = { x: 0, z: 0 };    // динамическая цель убегания (мировая)
+  /** Место, куда NPC убегает снаружи кабины (у каждого своё, подальше от стен и от остальных). */
+  fleeGoal: Point | null = null;
+  private path: Point[] = [];
+  private pathT = 0;
+  private stuckT = 0;
+  private lastX = 0;
+  private lastZ = 0;
   private fleeSeed = Math.random() * Math.PI * 2;
   private arms: TransformNode[] = [];
   private moving = false;
@@ -189,8 +201,12 @@ export class Npc {
   }
 
   private runAround(dt: number) {
-    const env = this.env, cab = env.cabin.position, sp = CONFIG.npc.runSpeed;
+    const env = this.env, sp = CONFIG.npc.runSpeed;
     const now = this.getWorldPosition();
+
+    // Снаружи кабины: разбегаемся по открытой части комнаты по маршруту, а не жмёмся к стенам цепочкой.
+    const nav = this.inCabin ? null : env.nav?.(Math.round(this.root.position.y / CONFIG.elevator.floorHeight)) ?? null;
+    if (nav) { this.fleeOutside(dt, now, nav, sp); return; }
 
     this.retarget -= dt;
     if (this.retarget <= 0 || Math.hypot(this.tw.x - now.x, this.tw.z - now.z) < 0.45) {
@@ -199,8 +215,73 @@ export class Npc {
       this.tw = this.chooseFleeTarget(now, threat);
       this.fleeSeed += rf(0.7, 1.8);
     }
+    this.step(this.tw.x, this.tw.z, sp * this.queueFactor(now), dt);
+  }
 
-    this.step(this.tw.x, this.tw.z, sp, dt);
+  /** В дверях не толкаются: тот, кто позади в той же полосе, притормаживает и пропускает передних. */
+  private queueFactor(me: { x: number; z: number }): number {
+    if (!this.inCabin || !this.env.elevator.exitOpen()) return 1;
+    for (const o of this.env.npcs) {
+      if (o === this || !o.alive || !o.inCabin) continue;
+      const q = o.world();
+      if (q.z < me.z && me.z - q.z < 1.3 && Math.abs(q.x - me.x) < 0.55) return 0.45;
+    }
+    return 1;
+  }
+
+  /**
+   * Бегство снаружи. Цель — свободная клетка в открытой части комнаты (не у стены, далеко от угрозы,
+   * не рядом с целями других NPC); к ней ведёт маршрут A*, обходящий предметы.
+   * Если NPC застрял или угроза приблизилась, цель выбирается заново.
+   */
+  private fleeOutside(dt: number, now: { x: number; z: number }, nav: NavGrid, sp: number) {
+    const threat = this.findNearestThreat();
+    this.retarget -= dt;
+    this.pathT -= dt;
+    const goalNearThreat = !!(this.fleeGoal && threat && Math.hypot(this.fleeGoal.x - threat.x, this.fleeGoal.z - threat.z) < 5);
+    const threatClose = !!(threat && Math.hypot(now.x - threat.x, now.z - threat.z) < 6);
+
+    if (!this.fleeGoal || (this.retarget <= 0 && (goalNearThreat || threatClose))) {
+      this.retarget = 1.2;
+      this.fleeGoal = this.pickFleeCell(now, threat, nav);
+      this.pathT = 0;
+    }
+
+    // Маршрут обновляется раз в ~0.8 с.
+    const goal = this.fleeGoal;
+    if (goal && this.pathT <= 0) {
+      this.pathT = 0.8;
+      this.path = nav.findPath(now.x, now.z, goal.x, goal.z) ?? [];
+    }
+    while (this.path.length && Math.hypot(this.path[0].x - now.x, this.path[0].z - now.z) < 0.5) this.path.shift();
+
+    const arrived = !!goal && Math.hypot(goal.x - now.x, goal.z - now.z) < 0.6;
+    if (goal && !arrived) {
+      const wp = this.path[0] ?? goal;
+      this.step(wp.x, wp.z, sp, dt);
+      // Почти не продвигаемся — выбираем другое место.
+      this.stuckT += dt;
+      if (this.stuckT > 0.7) {
+        if (Math.hypot(now.x - this.lastX, now.z - this.lastZ) < 0.35) { this.fleeGoal = null; this.path = []; }
+        this.lastX = now.x; this.lastZ = now.z; this.stuckT = 0;
+      }
+    }
+  }
+
+  private pickFleeCell(me: { x: number; z: number }, threat: Vector3 | null, nav: NavGrid): Point {
+    const others = this.env.npcs.filter((o) => o !== this && o.alive && !o.inCabin && o.fleeGoal).map((o) => o.fleeGoal!);
+    let best: Point | null = null, bestScore = -Infinity;
+    for (let i = 0; i < 40; i++) {
+      const p = { x: rf(-9, 9), z: rf(-7, 7) };
+      if (!nav.freeAt(p.x, p.z)) continue;
+      const dThreat = threat ? Math.hypot(p.x - threat.x, p.z - threat.z) : 6;
+      const wall = Math.min(CONFIG.level.halfX - Math.abs(p.x), CONFIG.level.halfZ - Math.abs(p.z));
+      let score = Math.min(dThreat, 12) + Math.min(wall, 3) * 1.5 - Math.hypot(p.x - me.x, p.z - me.z) * 0.15;
+      if (dThreat < 5) score -= 20;
+      if (others.some((o) => Math.hypot(o.x - p.x, o.z - p.z) < 2.5)) score -= 6;
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+    return best ?? { x: clamp(me.x, -9, 9), z: clamp(me.z, -7, 7) };
   }
 
   private findNearestThreat(): Vector3 | null {
@@ -291,9 +372,29 @@ export class Npc {
     const w = this.world(), dx = tx - w.x, dz = tz - w.z, d = Math.hypot(dx, dz);
     if (d < 0.05) return;
     this.moving = true;
+    let ax = dx / d, az = dz / d;
+
+    // Огибаем соседей: отталкиваемся от близких, а тех, кто прямо по ходу, обходим сбоку
+    // (каждый NPC в свою сторону), чтобы не упираться друг в друга и не идти колонной.
+    const side = this.fleeLane >= 0 ? 1 : -1;
+    for (const o of this.env.npcs) {
+      if (o === this || !o.alive) continue;
+      const q = o.world(), ox = w.x - q.x, oz = w.z - q.z, od = Math.hypot(ox, oz);
+      if (od > 1.1 || od < 1e-3) continue;
+      const k = (1.1 - od) / 1.1;
+      ax += (ox / od) * k * 1.4;
+      az += (oz / od) * k * 1.4;
+      if (od < 0.95 && (-ox * (dx / d) - oz * (dz / d)) / od > 0.5) { // сосед впереди по ходу
+        ax += -(dz / d) * side * k * 1.2;
+        az += (dx / d) * side * k * 1.2;
+      }
+    }
+    const len = Math.hypot(ax, az) || 1;
+    ax /= len; az /= len;
+
     const s = Math.min(speed * dt, d);
-    this.setWorld(w.x + (dx / d) * s, w.z + (dz / d) * s);
-    this.faceTo(Math.atan2(dx, dz), dt, 10);
+    this.setWorld(w.x + ax * s, w.z + az * s);
+    this.faceTo(Math.atan2(ax, az), dt, 10);
   }
 
   private setWorld(x: number, z: number) {

@@ -7,6 +7,10 @@ export class Hud {
   private bloodEl: HTMLElement | null = document.getElementById("bloodFx");
   private timer = 0;
   private bloodTimer = 0;
+  private warnEl: HTMLElement | null = null;
+  private warnLeft = 0;
+  private warnTime = 0;
+  private warnOrigin: { x: number; z: number } | null = null;
 
   setPaused(paused: boolean) {
     this.overlay.classList.toggle("hidden", !paused);
@@ -15,9 +19,49 @@ export class Hud {
 
   /** Скрывает игровой HUD, но оставляет сообщения результата. */
   setEnding() {
+    this.warnLeft = 0;
+    this.warnEl?.classList.add("hidden");
     this.overlay.classList.add("hidden");
     this.crosshair.classList.add("hidden");
     this.hint.classList.add("hidden");
+  }
+
+  /** Бросок гранаты: у края экрана на несколько секунд появляется стрелка в сторону, откуда бросили. */
+  warnGrenade(origin: { x: number; z: number }, seconds = 2.6) {
+    this.warnOrigin = { x: origin.x, z: origin.z };
+    this.warnLeft = seconds;
+    this.warnTime = 0;
+  }
+
+  /** Вызывать каждый кадр: стрелка следует за поворотом камеры (camYaw — угол взгляда, рад). */
+  updateWarning(dt: number, px: number, pz: number, camYaw: number) {
+    if (this.warnLeft <= 0 || !this.warnOrigin) {
+      this.warnEl?.classList.add("hidden");
+      return;
+    }
+    this.warnLeft -= dt;
+    this.warnTime += dt;
+    const el = this.getWarnElement();
+    const bearing = Math.atan2(this.warnOrigin.x - px, this.warnOrigin.z - pz);
+    const rel = Math.atan2(Math.sin(bearing - camYaw), Math.cos(bearing - camYaw)); // 0 — прямо, + вправо
+    el.style.left = `${50 + 46 * Math.sin(rel)}%`;
+    el.style.top = `${50 - 42 * Math.cos(rel)}%`;
+    el.style.transform = `translate(-50%, -50%) rotate(${rel}rad)`;
+    el.style.opacity = String(Math.min(1, this.warnLeft / 0.6) * (0.65 + 0.35 * Math.sin(this.warnTime * 16)));
+    el.classList.remove("hidden");
+  }
+
+  private getWarnElement(): HTMLElement {
+    if (!this.warnEl) {
+      const el = document.createElement("div");
+      el.className = "hidden";
+      el.style.cssText =
+        "position:fixed;width:70px;height:46px;z-index:41;pointer-events:none;background:#ff3b1d;" +
+        "clip-path:polygon(50% 0,100% 100%,50% 72%,0 100%);filter:drop-shadow(0 0 10px #ff2a00);";
+      document.body.appendChild(el);
+      this.warnEl = el;
+    }
+    return this.warnEl;
   }
 
   onStart(cb: () => void) {

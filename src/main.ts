@@ -148,6 +148,7 @@ const finishVictory = (
 };
 
 monsters.setDoorOpenProvider(() => elevator.exitOpen());
+monsters.onGrenadeThrown = (origin) => hud.warnGrenade(origin);
 
 elevator.onArrived = (floor) =>
   monsters.spawnForFloor(floor);
@@ -187,6 +188,7 @@ const env: NpcEnv = {
   weapon,
   elevator,
   npcs,
+  nav: (floor: number) => monsters.navFor(floor),
 };
 
 npcs.forEach(
@@ -283,6 +285,11 @@ scene.onBeforeRenderObservable.add(
     ) {
       showGameOver();
     }
+
+    // Индикация броска гранаты: стрелка у края экрана со стороны, откуда бросили.
+    const eye = player.getEyeRay(1);
+    const pp = player.getWorldPosition();
+    hud.updateWarning(dt, pp.x, pp.z, Math.atan2(eye.direction.x, eye.direction.z));
 
     monsters.update(dt);
   },

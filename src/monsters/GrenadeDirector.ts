@@ -22,17 +22,33 @@ export interface Thrower {
   startThrow(req: ThrowRequest): boolean;
 }
 
+const NUDGES = [[0, 0, 0], [0.3, 0, 0], [-0.3, 0, 0], [0, 0.25, 0], [0, -0.25, 0], [0, 0, 0.3], [0, 0, -0.3]].map((a) => new Vector3(a[0], a[1], a[2]));
+
+/** Бросок надёжен: дуга свободна не только из самой точки, но и при небольшом смещении (монстр не встаёт идеально). */
+export function isRobust(req: ThrowRequest, origin: Vector3): boolean {
+  return NUDGES.every((n) => req.plan(origin.add(n)) !== null);
+}
+
+/** Запускает гранату из руки; при необходимости чуть сдвигает точку вылета. false — дуги нет. */
+export function releaseThrow(req: ThrowRequest, hand: Vector3): boolean {
+  for (const n of NUDGES) {
+    const origin = hand.add(n), plan = req.plan(origin);
+    if (plan) { req.launch(origin, plan); return true; }
+  }
+  req.fail();
+  return false;
+}
+
 export const isThrower = (m: Monster): m is Monster & Thrower => typeof (m as unknown as Thrower).startThrow === "function";
 
 /**
  * Решает, когда монстрам пора бросить гранату.
  * Игрок «засел», если он ≥ campTime секунд находится в лифте (двери открыты, кабина на этом этаже)
- * либо почти не двигается в укрытии (ни один монстр его не видит). После броска все монстры этажа
- * ждут cooldown секунд. Метание в лифт — и ходячие, и летающие; в укрытие — ходячие.
+ * либо почти не двигается в укрытии (ни один монстр его не видит). Таймер один на этаж и общий для
+ * всех монстров: после каждого броска он обнуляется, то есть гранаты летят не чаще раза в campTime секунд. Метание в лифт — и ходячие, и летающие; в укрытие — ходячие.
  */
 export class GrenadeDirector {
   private camp = 0;
-  private cooldown = 0;
   private retry = 0;
   private pending = false;
   private anchor: Vector3 | null = null;
@@ -44,7 +60,6 @@ export class GrenadeDirector {
     private readonly player: Player,
     private readonly cabin: TransformNode,
     private readonly system: GrenadeSystem,
-    private readonly say: (text: string, ms?: number) => void,
     private readonly doorOpen: () => boolean,
   ) {}
 
@@ -54,7 +69,6 @@ export class GrenadeDirector {
 
   update(dt: number, floor: number, monsters: Monster[]) {
     const G = CONFIG.grenade;
-    this.cooldown = Math.max(0, this.cooldown - dt);
     this.retry = Math.max(0, this.retry - dt);
 
     const alive = monsters.filter((m) => m.alive);
@@ -82,7 +96,7 @@ export class GrenadeDirector {
       } else { this.camp = 0; this.anchor = null; }
     }
 
-    if (this.camp < G.campTime || this.cooldown > 0 || this.retry > 0 || this.pending) return;
+    if (this.camp < G.campTime || this.retry > 0 || this.pending) return;
     this.tryThrow(floorY, inLift, p, alive);
   }
 
@@ -135,20 +149,21 @@ export class GrenadeDirector {
       },
       launch: (from, plan) => {
         this.system.spawn(from, plan.velocity);
-        this.cooldown = G.cooldown;
+        this.camp = 0; // общий таймер этажа: следующая граната — после ещё campTime секунд «засидки»
         this.pending = false;
-        this.say("ГРАНАТА!", 1400);
       },
       fail: () => { this.pending = false; this.retry = G.retryDelay; },
     };
 
-    // Ходячие: нужна свободная дуга от их текущего места. Летающие сами займут позицию у двери (только в лифт).
-    const ready = monsters.filter(isThrower).filter((t) => t.canThrow())
-      .filter((t) => (t.kind === "flying" ? inLift : req.plan(t.getThrowOrigin()) !== null));
-    if (!ready.length) { this.retry = 1; return; }
-
-    const thrower = ready[Math.floor(Math.random() * ready.length)];
-    this.pending = true; // до вызова: бросок может состояться сразу, и launch() сбросит флаг
-    if (!thrower.startThrow(req)) { this.pending = false; this.retry = 1; }
+    // В лифт бросают и ходячие, и летающие: они сами выбирают позицию на осевой линии этажа, подальше от стены
+    // (startThrow вернёт false, если оттуда не пролетит дуга). В укрытие — только ходячие, прямо с места.
+    const ready = monsters.filter(isThrower).filter((t) => t.canThrow() && (inLift || t.kind === "walker"))
+      .sort(() => Math.random() - 0.5);
+    for (const thrower of ready) {
+      this.pending = true; // до вызова: бросок может состояться сразу, и launch() сбросит флаг
+      if (thrower.startThrow(req)) return;
+      this.pending = false;
+    }
+    this.retry = G.retryDelay;
   }
 }
