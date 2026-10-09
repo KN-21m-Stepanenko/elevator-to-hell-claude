@@ -15,6 +15,8 @@ export interface NpcEnv {
   /** Навигационная сетка этажа: по ней NPC выбирают места в открытой части комнаты и обходят предметы. */
   nav?: (floor: number) => NavGrid | null;
 }
+/** Места NPC в кабине (локальные x, z): решётка 3×3 с шагом 1,6 м — соседние места не ближе 1,6 м друг к другу. */
+const CABIN_SLOTS = [[-1.6, 1.6], [0, 1.6], [1.6, 1.6], [-1.6, 0], [0, 0], [1.6, 0], [-1.6, -1.4], [0, -1.4], [1.6, -1.4]];
 export type NpcState = "CALM" | "PANIC" | "DEAD";
 export type DeathCause = "weapon" | "lava" | "impact" | "crush";
 const CHAR = new Color3(0.05, 0.04, 0.04);
@@ -48,14 +50,35 @@ export class Npc {
   fleeGoal: Point | null = null;
   private path: Point[] = [];
   private pathT = 0;
-  private stuckT = 0;
-  private lastX = 0;
-  private lastZ = 0;
   private fleeSeed = Math.random() * Math.PI * 2;
   private arms: TransformNode[] = [];
   private moving = false;
   private armT = Math.random() * 10;
-  private runPhase = 0;
+  private runPhase = rf(0, Math.PI * 2);
+  private readonly runRate = rf(10.5, 13.5);
+  private static nextId = 0;
+  readonly id = Npc.nextId++;
+  /** Дошёл до своего места и стоит на нём. Читают и другие NPC, чтобы не выбирать то же место. */
+  settled = false;
+  private goalT = 0;              // время с выбора текущей цели
+  private progT = 0;              // таймер проверки прогресса
+  private progRem = Infinity;     // оставшийся путь на прошлой проверке
+  private settleT = 0;            // сколько уже стоит на месте
+  private nextActT = 0;           // до следующей смены позы / шага / взгляда
+  private style = rnd(0, 3);      // поза паники на месте (0 руки вверх, 1 закрылся, 2 присел, 3 машет)
+  private faceBias = rf(-0.5, 0.5);
+  private crouch = 0;
+  private readonly armRate = rf(10.5, 17);   // у каждого своя частота дрожи
+  private readonly armAmp = rf(0.22, 0.48);
+  private readonly armPhase = rf(0, Math.PI * 2);
+  /** Личное место в кабине (индекс в CABIN_SLOTS), -1 — не выбрано. */
+  private cabinSlot = -1;
+  private slotT = 0;                    // пауза между пересмотрами места
+  private cabinOff = { x: 0, z: 0 };    // небольшое смещение от места («переминается»)
+  private readonly exitLane = this.id % 2 ? 0.55 : -0.55; // своя полоса у выхода из кабины
+  private speed = 0;                    // сглаженная реальная скорость, м/с
+  private hdgX = 0;                     // сглаженное направление взгляда
+  private hdgZ = 1;
   /** У каждого NPC своя полоса бегства, чтобы группа не стекалась в одну точку. */
   private readonly fleeLane = rf(-1.15, 1.15);
 
@@ -65,6 +88,7 @@ export class Npc {
     this.root.position.set(pos[0], 0, pos[1]);
     this.root.rotation.y = yaw;
     this.lookYaw = yaw;
+    this.hdgX = Math.sin(yaw); this.hdgZ = Math.cos(yaw);
     const k = 0.85 + ((weight - 60) / 40) * 0.3; // полнее — шире
     this.root.scaling.set(k, 1, k);
 
@@ -113,6 +137,7 @@ export class Npc {
     this.alive = false; this.state = "DEAD";
     this.deathCause = cause; this.deathT = 0;
     this.parts.forEach((p) => (p.checkCollisions = false));
+    this.root.scaling.y = 1; // мог умереть в приседе
     this.root.position.y += 0.16; // лежит на полу, а не в нём
     this.setFlash(false);
   }
@@ -153,7 +178,6 @@ export class Npc {
   update(dt: number, frozen = false) {
     if (this.state === "DEAD") { this.updateDeath(dt); return; }
     if (frozen) return;
-    this.moving = false;
     this.flash = Math.max(0, this.flash - dt);
     this.setFlash(this.flash > 0);
 
@@ -166,23 +190,58 @@ export class Npc {
     if (scared) { this.calmT = 0; this.state = "PANIC"; }
     else if (this.state === "PANIC") { this.calmT += dt; if (this.calmT > 1) this.state = "CALM"; }
 
-    if (this.state === "PANIC") this.runAround(dt); else this.idle(dt);
+    const par =
+      this.root.parent instanceof TransformNode
+        ? this.root.parent
+        : null; 
+    const px = this.root.position.x, pz = this.root.position.z;
+    if (this.state === "PANIC") this.runAround(dt);
+    else { this.idle(dt); this.settled = false; this.fleeGoal = null; this.path = []; }
     this.separate();
     this.constrain();
+    this.trackMotion(dt, par, px, pz);
     this.animateArms(dt);
   }
 
-  /** Руки: в покое чуть покачиваются, при беге машут в противофазе, в панике на месте — вскинуты и дрожат. */
+  /**
+   * «Движется» определяется по реальному смещению за кадр (со сглаживанием и гистерезисом), а не по намерению идти.
+   * Иначе в тесноте NPC упирается в стену или соседа, флаг мигает, и руки дёргаются между бегом и позой паники.
+   */
+  private trackMotion(dt: number, par: TransformNode | null, px: number, pz: number) {
+    if (this.root.parent === par) { // при выходе из кабины система координат меняется — этот кадр пропускаем
+      const v = Math.hypot(this.root.position.x - px, this.root.position.z - pz) / Math.max(dt, 1e-3);
+      this.speed += (v - this.speed) * Math.min(1, dt * 8);
+    }
+    if (this.moving ? this.speed < 0.35 : this.speed > 0.8) this.moving = !this.moving;
+  }
+
+  /**
+   * Руки: в покое чуть покачиваются, при беге машут в противофазе. В панике на месте у каждого NPC своя
+   * поза (руки вверх / закрылся / присел / машет), своя частота и фаза дрожи, поза периодически меняется.
+   */
   private animateArms(dt: number) {
     this.armT += dt;
-    if (this.moving) this.runPhase += dt * 12;
-    const k = Math.min(1, dt * 14), panic = this.state === "PANIC";
+    if (this.moving) this.runPhase += dt * this.runRate;
+    const panic = this.state === "PANIC", still = panic && !this.moving;
+    const k = Math.min(1, dt * (still ? 9 : 14));
+    this.crouch += ((still && this.settled && this.style === 2 ? 1 : 0) - this.crouch) * Math.min(1, dt * 6);
+    this.root.scaling.y += (1 - 0.16 * this.crouch - this.root.scaling.y) * Math.min(1, dt * 8);
     this.arms.forEach((a, i) => {
       const s = i === 0 ? -1 : 1;
+      const t = this.armT * this.armRate + this.armPhase + i * 2.1;  // у каждой руки своя фаза
+      const drift = Math.sin(this.armT * 0.9 + this.armPhase * 1.7); // медленный дрейф ломает строгую периодичность
       let x: number, z: number;
       if (panic && this.moving) { x = Math.sin(this.runPhase + (i ? Math.PI : 0)) * 0.95; z = s * 0.12; }
-      else if (panic) { x = -2.1 + Math.sin(this.armT * 14 + i * 2) * 0.35; z = s * 0.35; }
-      else { x = Math.sin(this.armT * 1.3 + i * 1.7) * 0.05; z = s * 0.05; }
+      else if (panic) {
+        switch (this.style) {
+          case 1:  x = -1.95 + Math.sin(t) * 0.12; z = -s * (0.5 + 0.12 * drift); break;                  // закрыл лицо
+          case 2:  x = -2.7 + Math.sin(t) * 0.18 + Math.sin(t * 1.9) * 0.05; z = -s * 0.2; break;          // присел, руки над головой
+          case 3:  x = -1.6 + Math.sin(this.armT * (4.5 + this.armAmp * 4) + this.armPhase + i * Math.PI) * 0.9;
+                   z = s * (0.55 + 0.25 * Math.sin(t * 0.5)); break;                                      // машет руками
+          default: x = -2.1 + Math.sin(t) * this.armAmp + Math.sin(t * 1.9) * 0.05; z = s * (0.35 + 0.1 * drift); // руки вверх
+        }
+      }
+      else { x = Math.sin(this.armT * 1.3 + this.armPhase + i * 1.7) * 0.05; z = s * 0.05; }
       a.rotation.x += (x - a.rotation.x) * k;
       a.rotation.z += (z - a.rotation.z) * k;
     });
@@ -202,83 +261,308 @@ export class Npc {
 
   private runAround(dt: number) {
     const env = this.env, sp = CONFIG.npc.runSpeed;
+    if (this.inCabin) { this.cabinPanic(dt, sp); return; }
     const now = this.getWorldPosition();
 
     // Снаружи кабины: разбегаемся по открытой части комнаты по маршруту, а не жмёмся к стенам цепочкой.
-    const nav = this.inCabin ? null : env.nav?.(Math.round(this.root.position.y / CONFIG.elevator.floorHeight)) ?? null;
+    const nav = env.nav?.(Math.round(this.root.position.y / CONFIG.elevator.floorHeight)) ?? null;
     if (nav) { this.fleeOutside(dt, now, nav, sp); return; }
 
     this.retarget -= dt;
     if (this.retarget <= 0 || Math.hypot(this.tw.x - now.x, this.tw.z - now.z) < 0.45) {
       this.retarget = rf(0.45, 0.9);
       const threat = this.findNearestThreat();
-      this.tw = this.chooseFleeTarget(now, threat);
+      this.tw = this.chooseSpacedTarget(now, threat);
       this.fleeSeed += rf(0.7, 1.8);
     }
-    this.step(this.tw.x, this.tw.z, sp * this.queueFactor(now), dt);
+    this.step(this.tw.x, this.tw.z, sp, dt);
   }
 
-  /** В дверях не толкаются: тот, кто позади в той же полосе, притормаживает и пропускает передних. */
-  private queueFactor(me: { x: number; z: number }): number {
-    if (!this.inCabin || !this.env.elevator.exitOpen()) return 1;
+  /**
+   * Несколько вариантов цели; берём ту, что дальше всех от позиций и целей остальных NPC. Иначе все бегут
+   * в одну и ту же точку, упираются друг в друга и кружат рядом.
+   */
+  private chooseSpacedTarget(me: Vector3, threat: Vector3 | null) {
+    const others = this.env.npcs.filter((o) => o !== this && o.alive);
+    let best = this.chooseFleeTarget(me, threat), bestScore = -Infinity;
+    for (let k = 0; k < 6; k++) {
+      const c = k === 0 ? best : this.chooseFleeTarget(me, threat);
+      let score = 3;
+      for (const o of others) {
+        const q = o.world();
+        score = Math.min(score, Math.hypot(q.x - c.x, q.z - c.z));
+        if (o.state === "PANIC" && (o.tw.x !== 0 || o.tw.z !== 0)) score = Math.min(score, Math.hypot(o.tw.x - c.x, o.tw.z - c.z));
+      }
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    return best;
+  }
+
+  /**
+   * Паника в кабине. Кабина тесная, поэтому никакой беготни: у каждого NPC своё место на решётке, он идёт
+   * на него и там переминается и меняет позы. Если выход открыт — выходят двумя полосами, по очереди.
+   */
+  private cabinPanic(dt: number, sp: number) {
+    const P = CONFIG.npc.panic, p = this.root.position;
+    if (this.env.elevator.exitOpen()) { this.cabinExit(dt, sp); return; }
+
+    // Игрок стоит на моём месте — занимаю другое (игрок толкается, и NPC дёргался бы взад-вперёд).
+    this.slotT -= dt;
+    const pl = this.playerInCabin();
+    if (this.cabinSlot >= 0 && pl && this.slotT <= 0) {
+      const cs = CABIN_SLOTS[this.cabinSlot];
+      if (Math.hypot(cs[0] - pl.x, cs[1] - pl.z) < 1.0) { this.cabinSlot = -1; this.cabinOff = { x: 0, z: 0 }; }
+    }
+    if (this.cabinSlot < 0) { this.cabinSlot = this.claimCabinSlot(pl); this.slotT = 1.5; }
+    const s = CABIN_SLOTS[this.cabinSlot], tx = s[0] + this.cabinOff.x, tz = s[1] + this.cabinOff.z;
+    const d = Math.hypot(tx - p.x, tz - p.z);
+    const nudging = this.cabinOff.x !== 0 || this.cabinOff.z !== 0;
+    if (d > 0.1) this.cabinStep(dt, tx, tz, sp * P.cabinSpeed * (nudging && d < 0.8 ? 0.4 : 1));
+
+    this.settled = d < 0.6;
+    if (!this.settled) return;
+    // На месте: оглядывается / смотрит на угрозу, раз в несколько секунд меняет позу и переминается.
+    this.settleT += dt;
+    this.nextActT -= dt;
+    const w = this.world(), threat = this.findNearestThreat();
+    if (d <= 0.1) {
+      if (threat) this.faceTo(Math.atan2(threat.x - w.x, threat.z - w.z) + this.faceBias, dt, 4);
+      else {
+        this.lookT -= dt;
+        if (this.lookT <= 0) { this.lookT = rf(0.8, 2); this.lookYaw = this.root.rotation.y + rf(-1.8, 1.8); }
+        this.faceTo(this.lookYaw, dt, 5);
+      }
+    }
+    if (this.nextActT > 0) return;
+    this.nextActT = rf(P.actInterval[0], P.actInterval[1]);
+    this.style = (this.style + rnd(1, 3)) % 4;
+    this.faceBias = rf(-0.6, 0.6);
+    this.cabinOff = Math.random() < 0.5 ? { x: rf(-P.cabinOffset, P.cabinOffset), z: rf(-P.cabinOffset, P.cabinOffset) } : { x: 0, z: 0 };
+  }
+
+  /** Локальная позиция игрока, если он в кабине (иначе null). */
+  private playerInCabin(): { x: number; z: number } | null {
+    const env = this.env, pl = env.player;
+    if (!pl.alive) return null;
+    const pp = pl.body.position, c = env.cabin.position;
+    if (Math.abs(pp.y - c.y) > 3 || Math.abs(pp.x - c.x) > 2.6 || Math.abs(pp.z - c.z) > 2.6) return null;
+    return { x: pp.x - c.x, z: pp.z - c.z };
+  }
+
+  /** Свободное место в кабине, ближайшее к текущей позиции (не под игроком). */
+  private claimCabinSlot(pl: { x: number; z: number } | null): number {
+    const taken = new Set<number>();
+    for (const o of this.env.npcs) if (o !== this && o.alive && o.inCabin && o.cabinSlot >= 0) taken.add(o.cabinSlot);
+    const p = this.root.position;
+    let best = 0, bd = Infinity;
+    CABIN_SLOTS.forEach((s, i) => {
+      if (taken.has(i) || (pl && Math.hypot(s[0] - pl.x, s[1] - pl.z) < 1.0)) return;
+      const d = Math.hypot(s[0] - p.x, s[1] - p.z);
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  }
+
+  /** Выход из кабины: у каждого своя полоса (±0,55 м от оси двери), задний притормаживает за передним. */
+  private cabinExit(dt: number, sp: number) {
+    const p = this.root.position;
+    let k = 1;
     for (const o of this.env.npcs) {
       if (o === this || !o.alive || !o.inCabin) continue;
-      const q = o.world();
-      if (q.z < me.z && me.z - q.z < 1.3 && Math.abs(q.x - me.x) < 0.55) return 0.45;
+      const q = o.root.position;
+      if (q.z < p.z && p.z - q.z < 1.1 && Math.abs(q.x - p.x) < 0.5) k = 0.4;
     }
-    return 1;
+    this.settled = false;
+    this.cabinSlot = -1; // после выхода/закрытия двери выберет место заново
+    this.cabinOff = { x: 0, z: 0 };
+    this.cabinStep(dt, this.exitLane, -3.2, sp * k);
+  }
+
+  /** Шаг внутри кабины в локальных координатах (кабина может трястись и ехать — NPC едет вместе с ней). */
+  private cabinStep(dt: number, tx: number, tz: number, speed: number) {
+    const p = this.root.position, dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz);
+    if (d < 0.03) return;
+    let ax = dx / d, az = dz / d;
+    for (const o of this.env.npcs) {
+      if (o === this || !o.alive || !o.inCabin) continue;
+      const q = o.root.position, ox = p.x - q.x, oz = p.z - q.z, od = Math.hypot(ox, oz);
+      if (od > 1.0 || od < 1e-3) continue;
+      const k = 1 - od;
+      ax += (ox / od) * k * 1.2;
+      az += (oz / od) * k * 1.2;
+    }
+    const pl = this.playerInCabin();
+    if (pl) {
+      const ox = p.x - pl.x, oz = p.z - pl.z, od = Math.hypot(ox, oz);
+      if (od < 1.1 && od > 1e-3) { ax += (ox / od) * (1.1 - od) * 1.2; az += (oz / od) * (1.1 - od) * 1.2; }
+    }
+    const len = Math.hypot(ax, az) || 1;
+    ax /= len; az /= len;
+    const s = Math.min(speed * dt, d);
+    p.x += ax * s;
+    p.z += az * s;
+    this.faceHeading(ax, az, dt);
+  }
+
+  /** Плавный разворот по направлению движения (без дёрганья от смены сил отталкивания). */
+  private faceHeading(ax: number, az: number, dt: number) {
+    const k = Math.min(1, dt * 7);
+    this.hdgX += (ax - this.hdgX) * k;
+    this.hdgZ += (az - this.hdgZ) * k;
+    if (Math.hypot(this.hdgX, this.hdgZ) > 0.05) this.faceTo(Math.atan2(this.hdgX, this.hdgZ), dt, 10);
   }
 
   /**
    * Бегство снаружи. Цель — свободная клетка в открытой части комнаты (не у стены, далеко от угрозы,
-   * не рядом с целями других NPC); к ней ведёт маршрут A*, обходящий предметы.
-   * Если NPC застрял или угроза приблизилась, цель выбирается заново.
+   * на расстоянии от целей и позиций других NPC); к ней ведёт маршрут A*, обходящий предметы.
+   * Цель меняется, если угроза приблизилась, место заняли, либо NPC не приближается к нему (кружит).
+   * Дойдя до места, NPC не замирает: меняет позу, поворачивается к угрозе, переступает.
    */
   private fleeOutside(dt: number, now: { x: number; z: number }, nav: NavGrid, sp: number) {
+    const P = CONFIG.npc.panic;
     const threat = this.findNearestThreat();
     this.retarget -= dt;
     this.pathT -= dt;
+    this.goalT += dt;
     const goalNearThreat = !!(this.fleeGoal && threat && Math.hypot(this.fleeGoal.x - threat.x, this.fleeGoal.z - threat.z) < 5);
     const threatClose = !!(threat && Math.hypot(now.x - threat.x, now.z - threat.z) < 6);
 
     if (!this.fleeGoal || (this.retarget <= 0 && (goalNearThreat || threatClose))) {
-      this.retarget = 1.2;
-      this.fleeGoal = this.pickFleeCell(now, threat, nav);
-      this.pathT = 0;
+      this.assignGoal(now, threat, nav, null);
+    } else if (this.goalT > 0.4 && !this.settled && this.goalTaken(now, this.fleeGoal)) {
+      this.assignGoal(now, threat, nav, this.fleeGoal); // моё место занял другой — иду в другое
     }
+    const goal = this.fleeGoal;
+    if (!goal) return;
 
     // Маршрут обновляется раз в ~0.8 с.
-    const goal = this.fleeGoal;
-    if (goal && this.pathT <= 0) {
+    if (this.pathT <= 0) {
       this.pathT = 0.8;
       this.path = nav.findPath(now.x, now.z, goal.x, goal.z) ?? [];
     }
     while (this.path.length && Math.hypot(this.path[0].x - now.x, this.path[0].z - now.z) < 0.5) this.path.shift();
 
-    const arrived = !!goal && Math.hypot(goal.x - now.x, goal.z - now.z) < 0.6;
-    if (goal && !arrived) {
-      const wp = this.path[0] ?? goal;
-      this.step(wp.x, wp.z, sp, dt);
-      // Почти не продвигаемся — выбираем другое место.
-      this.stuckT += dt;
-      if (this.stuckT > 0.7) {
-        if (Math.hypot(now.x - this.lastX, now.z - this.lastZ) < 0.35) { this.fleeGoal = null; this.path = []; }
-        this.lastX = now.x; this.lastZ = now.z; this.stuckT = 0;
-      }
+    const dGoal = Math.hypot(goal.x - now.x, goal.z - now.z);
+    if (this.settled && dGoal > P.arriveRadius + 1.2) this.settled = false; // вытолкнули с места
+    if (!this.settled && dGoal < P.arriveRadius) this.settle();
+
+    if (this.settled) { this.settledBehavior(dt, now, threat, nav); return; }
+
+    const wp = this.path[0] ?? goal;
+    this.step(wp.x, wp.z, sp, dt);
+
+    // Раз в секунду проверяем, сокращается ли оставшийся путь. Если нет — NPC топчется или кружит
+    // вокруг другого NPC (смещение при этом большое, поэтому сравнивать надо путь до цели, а не позицию).
+    this.progT += dt;
+    if (this.progT >= 1) {
+      this.progT = 0;
+      const rem = this.remaining(now, goal);
+      if (this.progRem - rem < P.minProgress) {
+        if (rem < P.settleNear && nav.freeAt(now.x, now.z)) {
+          this.fleeGoal = { x: now.x, z: now.z }; // уже рядом, но место занято — остаёмся, где стоим
+          this.settle();
+        } else {
+          this.assignGoal(now, threat, nav, goal);
+        }
+      } else this.progRem = rem;
     }
   }
 
-  private pickFleeCell(me: { x: number; z: number }, threat: Vector3 | null, nav: NavGrid): Point {
-    const others = this.env.npcs.filter((o) => o !== this && o.alive && !o.inCabin && o.fleeGoal).map((o) => o.fleeGoal!);
+  private settle() {
+    this.settled = true;
+    this.settleT = 0;
+    this.nextActT = rf(CONFIG.npc.panic.actInterval[0], CONFIG.npc.panic.actInterval[1]);
+  }
+
+  private assignGoal(now: { x: number; z: number }, threat: Vector3 | null, nav: NavGrid, avoid: Point | null) {
+    this.fleeGoal = this.pickFleeCell(now, threat, nav, avoid);
+    this.retarget = 1.2;
+    this.pathT = 0;
+    this.goalT = 0;
+    this.progT = 0;
+    this.progRem = Infinity;
+    this.settled = false;
+    this.path = [];
+  }
+
+  /** Длина оставшегося пути до цели (по точкам маршрута). */
+  private remaining(now: { x: number; z: number }, goal: Point): number {
+    let rem = 0, px = now.x, pz = now.z;
+    for (const p of this.path) { rem += Math.hypot(p.x - px, p.z - pz); px = p.x; pz = p.z; }
+    return rem + Math.hypot(goal.x - px, goal.z - pz);
+  }
+
+  /** Место занято: другой NPC уже стоит у цели ближе меня, либо его цель почти совпала с моей (уступает младший id). */
+  private goalTaken(now: { x: number; z: number }, goal: Point): boolean {
+    const P = CONFIG.npc.panic, mine = Math.hypot(goal.x - now.x, goal.z - now.z);
+    for (const o of this.env.npcs) {
+      if (o === this || !o.alive || o.inCabin) continue;
+      const q = o.world(), dq = Math.hypot(q.x - goal.x, q.z - goal.z);
+      if (dq < P.goalSpacing * 0.5 && dq < mine) return true;
+      if (o.fleeGoal && Math.hypot(o.fleeGoal.x - goal.x, o.fleeGoal.z - goal.z) < P.goalSpacing * 0.75 && (o.settled || o.id < this.id)) return true;
+    }
+    return false;
+  }
+
+  /** Стоит на месте в панике: оглядывается / поворачивается к угрозе, иногда меняет позу, переступает или перебегает. */
+  private settledBehavior(dt: number, now: { x: number; z: number }, threat: Vector3 | null, nav: NavGrid) {
+    const P = CONFIG.npc.panic;
+    this.settleT += dt;
+    this.nextActT -= dt;
+    if (threat) this.faceTo(Math.atan2(threat.x - now.x, threat.z - now.z) + this.faceBias, dt, 4);
+    else {
+      this.lookT -= dt;
+      if (this.lookT <= 0) { this.lookT = rf(0.8, 2); this.lookYaw = this.root.rotation.y + rf(-1.8, 1.8); }
+      this.faceTo(this.lookYaw, dt, 5);
+    }
+    if (this.nextActT > 0) return;
+    this.nextActT = rf(P.actInterval[0], P.actInterval[1]);
+    this.style = (this.style + rnd(1, 3)) % 4; // другая поза, чем сейчас
+    this.faceBias = rf(-0.6, 0.6);
+    const r = Math.random();
+    if (r < P.relocateChance && this.settleT > P.relocateAfter) this.assignGoal(now, threat, nav, this.fleeGoal);
+    else if (r < 0.55) this.nudge(now, nav);
+  }
+
+  /** Короткий шаг в сторону на свободное место (не вплотную к другим NPC и их целям). */
+  private nudge(now: { x: number; z: number }, nav: NavGrid) {
+    const P = CONFIG.npc.panic;
+    const others = this.env.npcs.filter((o) => o !== this && o.alive && !o.inCabin);
+    for (let i = 0; i < 8; i++) {
+      const a = rf(0, Math.PI * 2), d = rf(P.nudgeRange[0], P.nudgeRange[1]);
+      const p = { x: now.x + Math.cos(a) * d, z: now.z + Math.sin(a) * d };
+      if (!nav.freeAt(p.x, p.z) || !nav.lineFree(now.x, now.z, p.x, p.z)) continue;
+      if (others.some((o) => {
+        const q = o.world(), g = o.fleeGoal;
+        return Math.hypot(q.x - p.x, q.z - p.z) < 1.2 || (!!g && Math.hypot(g.x - p.x, g.z - p.z) < 1.2);
+      })) continue;
+      this.fleeGoal = p;
+      this.settled = false;
+      this.goalT = 0; this.progT = 0; this.progRem = Infinity;
+      this.path = []; this.pathT = 0.8; // короткий шаг — маршрут не нужен
+      return;
+    }
+  }
+
+  private pickFleeCell(me: { x: number; z: number }, threat: Vector3 | null, nav: NavGrid, avoid: Point | null = null): Point {
+    const P = CONFIG.npc.panic;
+    // Занятые места: цели и текущие позиции остальных NPC снаружи.
+    const taken: Point[] = [];
+    for (const o of this.env.npcs) {
+      if (o === this || !o.alive || o.inCabin) continue;
+      taken.push(o.world());
+      if (o.fleeGoal) taken.push(o.fleeGoal);
+    }
     let best: Point | null = null, bestScore = -Infinity;
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 60; i++) {
       const p = { x: rf(-9, 9), z: rf(-7, 7) };
       if (!nav.freeAt(p.x, p.z)) continue;
       const dThreat = threat ? Math.hypot(p.x - threat.x, p.z - threat.z) : 6;
       const wall = Math.min(CONFIG.level.halfX - Math.abs(p.x), CONFIG.level.halfZ - Math.abs(p.z));
       let score = Math.min(dThreat, 12) + Math.min(wall, 3) * 1.5 - Math.hypot(p.x - me.x, p.z - me.z) * 0.15;
       if (dThreat < 5) score -= 20;
-      if (others.some((o) => Math.hypot(o.x - p.x, o.z - p.z) < 2.5)) score -= 6;
+      if (taken.some((o) => Math.hypot(o.x - p.x, o.z - p.z) < P.goalSpacing)) score -= 100; // почти запрет; остаётся лишь как запасной вариант
+      if (avoid && Math.hypot(avoid.x - p.x, avoid.z - p.z) < P.avoidRadius) score -= 100;
       if (score > bestScore) { bestScore = score; best = p; }
     }
     return best ?? { x: clamp(me.x, -9, 9), z: clamp(me.z, -7, 7) };
@@ -316,8 +600,6 @@ export class Npc {
   }
 
   private chooseFleeTarget(me: Vector3, threat: Vector3 | null) {
-    const cab = this.env.cabin.position;
-
     // Основное направление всегда от угрозы. Боковое смещение ограничено,
     // поэтому случайность не может развернуть NPC обратно к угрозе.
     let awayX = Math.cos(this.fleeSeed);
@@ -335,30 +617,13 @@ export class Npc {
     const sideX = -awayZ;
     const sideZ = awayX;
     // Каждый NPC получает свой знак и силу бокового ухода.
-    const side = (this.fleeLane >= 0 ? 1 : -1) * rf(0.35, 0.8);
+    // + «веер» по id: разным NPC достаются разные углы ухода от угрозы.
+    const side = (this.fleeLane >= 0 ? 1 : -1) * rf(0.35, 0.8) + ((this.id % 5) - 2) * 0.25;
     let dirX = awayX + sideX * side;
     let dirZ = awayZ + sideZ * side;
     const dirLen = Math.hypot(dirX, dirZ) || 1;
     dirX /= dirLen;
     dirZ /= dirLen;
-
-    if (this.inCabin && this.env.elevator.exitOpen()) {
-      // Выход общий, но точки входа в дверь и дальнейшего движения различаются.
-      const lane = clamp(this.fleeLane + rf(-0.3, 0.3), -1.0, 1.0);
-      const lateral = lane + side * 0.45;
-      return {
-        x: cab.x + clamp(lateral, -1.05, 1.05),
-        z: cab.z - 3.55,
-      };
-    }
-
-    if (this.inCabin) {
-      const distance = rf(1.0, 2.0);
-      return {
-        x: cab.x + clamp(this.root.position.x + dirX * distance + sideX * rf(0.4, 1.0), -2.0, 2.0),
-        z: cab.z + clamp(this.root.position.z + dirZ * distance + sideZ * rf(0.4, 1.0), -2.0, 2.0),
-      };
-    }
 
     // Снаружи выбираем разные дальние точки, но все они находятся дальше от угрозы.
     const distance = rf(4.0, 7.0);
@@ -371,12 +636,11 @@ export class Npc {
   private step(tx: number, tz: number, speed: number, dt: number) {
     const w = this.world(), dx = tx - w.x, dz = tz - w.z, d = Math.hypot(dx, dz);
     if (d < 0.05) return;
-    this.moving = true;
     let ax = dx / d, az = dz / d;
 
     // Огибаем соседей: отталкиваемся от близких, а тех, кто прямо по ходу, обходим сбоку
     // (каждый NPC в свою сторону), чтобы не упираться друг в друга и не идти колонной.
-    const side = this.fleeLane >= 0 ? 1 : -1;
+    const side = this.fleeLane >= 0 ? 1 : -1, hx = dx / d, hz = dz / d;
     for (const o of this.env.npcs) {
       if (o === this || !o.alive) continue;
       const q = o.world(), ox = w.x - q.x, oz = w.z - q.z, od = Math.hypot(ox, oz);
@@ -384,9 +648,13 @@ export class Npc {
       const k = (1.1 - od) / 1.1;
       ax += (ox / od) * k * 1.4;
       az += (oz / od) * k * 1.4;
-      if (od < 0.95 && (-ox * (dx / d) - oz * (dz / d)) / od > 0.5) { // сосед впереди по ходу
-        ax += -(dz / d) * side * k * 1.2;
-        az += (dx / d) * side * k * 1.2;
+      if (od < 0.95 && (-ox * hx - oz * hz) / od > 0.5) { // сосед впереди по ходу
+        // Обходим с той стороны, куда я уже смещён относительно линии хода: так встречные расходятся,
+        // а не уходят в одну сторону зеркально. Свой знак (fleeLane) — только если сосед ровно по курсу.
+        const lat = ox * -hz + oz * hx;
+        const sg = Math.abs(lat) > 0.12 ? Math.sign(lat) : side;
+        ax += -hz * sg * k * 1.2;
+        az += hx * sg * k * 1.2;
       }
     }
     const len = Math.hypot(ax, az) || 1;
@@ -394,7 +662,7 @@ export class Npc {
 
     const s = Math.min(speed * dt, d);
     this.setWorld(w.x + ax * s, w.z + az * s);
-    this.faceTo(Math.atan2(ax, az), dt, 10);
+    this.faceHeading(ax, az, dt);
   }
 
   private setWorld(x: number, z: number) {

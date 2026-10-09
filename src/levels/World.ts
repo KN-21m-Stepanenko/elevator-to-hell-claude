@@ -3,7 +3,7 @@ import { CONFIG } from "../config";
 import { createCabin } from "../elevator/CabinShell";
 import { Door } from "../elevator/Door";
 import { createMaterials, Kind } from "../utils/textures";
-import { addBox, addCylinder } from "./builders";
+import { addBox, addCylinder } from "./Builders";
 import { createSky } from "./Sky";
 import { LavaShaft } from "./LavaShaft";
 
@@ -17,6 +17,10 @@ interface Theme {
 }
 const C = (r: number, g: number, b: number) => new Color3(r, g, b);
 const CRATE = [1.2, 1.2, 1.2];
+const HIGH_CRATE = [1.2, 3.0, 1.2];
+const DBL_CRATE = [1.2, 1.2, 3.0];
+
+
 
 /**
  * Темы этажей. Правило для будущих этапов: полоса x∈[-1.5; 1.5] перед лифтом всегда свободна.
@@ -29,24 +33,25 @@ const THEMES: Record<number, Theme> = {
     props: (b) => {
       b.box("concrete", "pillar_a", [1, 4, 1], [-5, 2, -2]);
       b.box("concrete", "pillar_b", [1, 4, 1], [5, 2, -2]);
-      b.box("concrete", "pillar_b", [1, 4, 1], [5, 2, 4]);
-      b.box("crate", "crate_a", CRATE, [7.5, 0.6, -5.5]);
-      b.box("crate", "crate_b", CRATE, [8.8, 0.6, -5.5]);
-      b.box("crate", "crate_c", CRATE, [8.1, 1.8, -5.5]);
-      b.box("crate", "crate_a1", CRATE, [-7.5, 0.6, 4.5]);
-      b.box("crate", "crate_b1", CRATE, [-8.8, 0.6, 5.5]);
-      b.box("crate", "crate_c1", CRATE, [-8.1, 1.8, 5.0]);
+      b.box("concrete", "pillar_c", [1, 4, 1], [5, 2, 4]);
+      b.box("crate", "crate_a", CRATE, [7.0, 0.6, -4.9]);
+      b.box("crate", "crate_b", CRATE, [8.3, 0.6, -5.5]);
+      b.box("crate", "crate_c", CRATE, [7.6, 1.8, -5.2]);
+      b.box("crate", "crate_a1", HIGH_CRATE, [-6.5, 1.5, 4.5]);
+      b.box("crate", "crate_b1", CRATE, [-6.0, 0.6, 2.7]);
+      b.box("crate", "crate_c1", HIGH_CRATE, [-7.5, 1.5, 3.0]);
+      b.box("crate", "crate_1c", DBL_CRATE, [-7.5, 0.6, -5.0]);
     },
   },
   1: {
     wall: "brick", floor: "floor", ceil: "ceiling", tint: C(1, 0.9, 0.75), glow: Color3.Black(), H: 4,
     lamps: [{ pos: [0, 3.5, -3], color: C(1, 0.82, 0.45), i: 0.9, range: 16 }, { pos: [0, 3.5, 5], color: C(1, 0.8, 0.5), i: 0.7, range: 12 }],
     props: (b) => {
-      for (const z of [-5.5, -1.5, 2.5]) b.box("metal", "shelf", [0.7, 2.4, 2.4], [-9.4, 1.2, z]);
-      b.box("crate", "cr1", CRATE, [8.6, 0.6, -5]); b.box("crate", "cr2", CRATE, [8.6, 0.6, -3.6]);
-      b.box("crate", "cr3", CRATE, [8.6, 1.8, -4.3]); b.box("crate", "cr4", CRATE, [8.6, 0.6, 1]);
-      b.box("crate", "cr5", CRATE, [7.2, 0.6, 1.4]);
-      b.box("concrete", "pallet_a", [2, 0.3, 2], [-4, 0.15, -6]); b.box("crate", "cr6", CRATE, [-4, 0.9, -6]);
+      for (const z of [-5.5, -1.5, 2.5]) b.box("bamboo", "shelf", [0.7, 2.4, 2.4], [-9.4, 1.2, z]);
+      b.box("darkwood", "cr1", DBL_CRATE, [8.0, 0.6, -5]); b.box("darkwood", "cr2", DBL_CRATE, [-4.3, 0.6, 4.5]);
+      b.box("darkwood", "cr3", DBL_CRATE, [7.7, 1.8, -3.5]); b.box("darkwood", "cr4", CRATE, [8.0, 0.6, -2]);
+      b.box("darkwood", "cr5", HIGH_CRATE, [6.6, 0.6, 3.4]); b.box("darkwood", "cr6", HIGH_CRATE, [5.3, 0.6, 2.1]);
+      b.box("concrete", "pallet_a", [2, 0.3, 2], [-4, 0.15, -6]); b.box("darkwood", "cr6", HIGH_CRATE, [-4, 0.9, -6]);
       b.box("concrete", "pallet_b", [2, 0.3, 2], [4, 0.15, -6]);
     },
   },
@@ -56,7 +61,7 @@ const THEMES: Record<number, Theme> = {
     props: (b) => {
       for (const [x, z] of [[-5, -4], [5, -4], [-5, 1.5], [5, 1.5]]) b.box("metal", "table", [3, 0.9, 1.1], [x, 0.45, z]);
       for (const z of [-6, -4.8, -3.6, -2.4]) b.box("metal", "locker", [0.6, 2, 1], [-9.5, 1, z]);
-      b.cyl("tile", "tank", 1.2, 2.4, [8.6, 1.2, 5.5]);
+      b.cyl("metal", "tank", 1.2, 2.4, [8.6, 1.2, 5.5]);
     },
   },
   3: {
@@ -65,7 +70,8 @@ const THEMES: Record<number, Theme> = {
     props: (b) => {
       for (const [x, z] of [[-6.5, -3], [6.5, -3], [-6.5, 3.5]]) b.cyl("metal", "boiler", 2.6, 3.6, [x, 1.8, z]);
       for (const x of [-3.5, 3.5]) b.cyl("metal", "pipe", 0.4, 15.6, [x, 3.5, 0], "z");
-      b.box("metal", "furnace", [2, 1.6, 3], [8.5, 0.8, -2]);
+      b.box("tarp", "furnace", [2, 1.6, 2], [1.5, 0.8, -5]);
+      b.box("tarp", "furnace", [1.5, 1.2, 1.5], [-1.5, 0.8, 2]);
     },
   },
   4: {
@@ -77,9 +83,9 @@ const THEMES: Record<number, Theme> = {
         b.box("metal", "leg", [0.3, 0.7, 0.3], [7 + x, 0.35, -4 + z]);
       }
       b.cyl("metal", "watertank", 3, 2.4, [7, 1.9, -4]);
-      b.box("concrete", "vent_a", [1.6, 1, 1.6], [-7, 0.5, 5]);
-      b.box("metal", "vent_b", [1.2, 1.8, 1.2], [-8, 0.9, 1]);
-      b.box("crate", "cr_a", CRATE, [8.6, 0.6, 3]); b.box("crate", "cr_b", CRATE, [8.6, 0.6, 4.3]);
+      b.box("metal", "vent_a", [1.6, 1, 1.6], [-7, 0.5, 5]);
+      b.box("vent", "vent_b", [1.2, 1.8, 1.2], [-8, 0.9, 1]);
+      b.box("camo", "cr_a", CRATE, [8.6, 0.6, 3]); b.box("camo", "cr_b", CRATE, [8.6, 0.6, 4.3]);
     },
   },
 };

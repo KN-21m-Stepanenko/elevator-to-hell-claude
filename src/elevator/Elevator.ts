@@ -65,9 +65,28 @@ export class Elevator {
   }
 
   playerInside(): boolean {
-    const E = CONFIG.elevator, p = this.player.body.position, r = this.root.position, half = E.cabinSize / 2;
-    const feet = p.y - CONFIG.player.ellipsoid.y;
-    return Math.abs(p.x - r.x) < half && p.z > r.z - half + 0.5 && p.z < r.z + half && feet > r.y - 0.3 && feet < r.y + E.cabinHeight;
+    const E = CONFIG.elevator;
+    const P = CONFIG.player;
+
+    const p = this.player.body.position;
+    const r = this.root.position;
+
+    const half = E.cabinSize / 2;
+    const feet = p.y - P.ellipsoid.y;
+
+    // Проверяем положение центра игрока относительно кабины.
+    const insideX =
+      Math.abs(p.x - r.x) <= half;
+
+    const insideZ =
+      p.z >= r.z - half &&
+      p.z <= r.z + half;
+
+    const insideY =
+      feet >= r.y - 0.3 &&
+      feet <= r.y + E.cabinHeight;
+
+    return insideX && insideZ && insideY;
   }
 
   private computeWeight(): number {
