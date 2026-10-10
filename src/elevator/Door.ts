@@ -1,6 +1,6 @@
 import { Mesh, Scene, TransformNode } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { addBox, Mats } from "../levels/Builders";
+import { addBox, Mats } from "../levels/builders";
 
 /** Двустворчатая раздвижная дверь. open: 0 — закрыта, 1 — открыта. */
 export class Door {

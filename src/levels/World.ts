@@ -3,7 +3,7 @@ import { CONFIG } from "../config";
 import { createCabin } from "../elevator/CabinShell";
 import { Door } from "../elevator/Door";
 import { createMaterials, Kind } from "../utils/textures";
-import { addBox, addCylinder } from "./Builders";
+import { addBox, addCylinder } from "./builders";
 import { createSky } from "./Sky";
 import { LavaShaft } from "./LavaShaft";
 

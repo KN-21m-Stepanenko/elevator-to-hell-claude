@@ -1,6 +1,6 @@
 import { Color3, PointLight, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { CONFIG } from "../config";
-import { addBox, Mats } from "../levels/Builders";
+import { addBox, Mats } from "../levels/builders";
 import { Door } from "./Door";
 
 /**

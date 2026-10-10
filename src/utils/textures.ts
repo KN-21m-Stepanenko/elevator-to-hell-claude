@@ -1,7 +1,9 @@
 import { Color3, DynamicTexture, Scene, StandardMaterial, Texture } from "@babylonjs/core";
 
-// Добавлены новые типы: "vent" | "bamboo" | "darkwood" | "tarp" | "camo"
-export type Kind = "concrete" | "floor" | "metal" | "crate" | "ceiling" | "brick" | "tile" | "vent" | "bamboo" | "darkwood" | "tarp" | "camo";
+export type Kind =
+  | "concrete" | "floor" | "metal" | "crate" | "ceiling" | "brick" | "tile"
+  // Щиты и укрытия. В этих текстурах НЕТ окантовки: рама, перегородка и заклёпки — геометрия модели (см. addFramedBox).
+  | "vent" | "bamboo" | "darkwood" | "tarp" | "camo" | "burnt";
 const SIZE = 64;
 
 /** Детерминированный генератор случайных чисел (mulberry32). */
@@ -108,254 +110,120 @@ const DRAW: Record<Kind, (c: Ctx, r: Rnd) => void> = {
     c.fillRect(0, SIZE / 2, SIZE, 2); c.fillRect(SIZE / 2, 0, 2, SIZE);
   },
 
-    // =========================================================
-  // НОВЫЕ ТЕКСТУРЫ
-  // =========================================================
+  // ---------- Новые текстуры (бесшовные 64×64, без окантовки: рама строится моделью) ----------
 
-    /** 1. Горизонтальные жалюзи вентиляции с непрерывной рамкой по краям */
+  /** Горизонтальные жалюзи вентиляции: 8 пластин на повтор, блик сверху, скос снизу, редкие ржавые подтёки. */
   vent: (c, r) => {
-    // Тёмное основание.
-    c.fillStyle = "#111416";
-    c.fillRect(0, 0, SIZE, SIZE);
-
-    // Горизонтальные жалюзи. Не доходят до краёв текстуры.
-    for (let y = 5; y < SIZE - 5; y += 8) {
-      c.fillStyle = "#2a3035";
-      c.fillRect(3, y + 6, SIZE - 6, 2);
-
-      c.fillStyle = "#5a6570";
-      c.fillRect(3, y, SIZE - 6, 5);
-
-      c.fillStyle = "#8a95a0";
-      c.fillRect(3, y, SIZE - 6, 1);
-
-      c.fillStyle = "#20272d";
-      c.fillRect(3, y + 4, SIZE - 6, 1);
-
-      // Небольшие царапины на металле.
-      if (r() > 0.5) {
-        c.fillStyle = "#414b54";
-        const x = 5 + ((r() * (SIZE - 15)) | 0);
-        c.fillRect(x, y + 2, 2 + ((r() * 5) | 0), 1);
+    c.fillStyle = "#101315"; c.fillRect(0, 0, SIZE, SIZE); // тёмный проём между пластинами
+    for (let y = 0; y < SIZE; y += 8) {
+      for (let x = 0; x < SIZE; x++) {
+        const n = (r() - 0.5) * 14;
+        c.fillStyle = `rgb(${(88 + n) | 0},${(99 + n) | 0},${(110 + n) | 0})`;
+        c.fillRect(x, y + 1, 1, 5);
       }
+      c.fillStyle = "#9aa6b2"; c.fillRect(0, y, SIZE, 1);     // блик верхней кромки
+      c.fillStyle = "#2b3238"; c.fillRect(0, y + 6, SIZE, 1); // скос вниз
+      if (r() > 0.55) { c.fillStyle = "#6b4a30"; c.fillRect((r() * 44) | 0, y + 2 + ((r() * 3) | 0), ((r() * 12) | 0) + 3, 1); }
     }
-
-    // Центральная вертикальная разделительная полоса.
-    c.fillStyle = "#171c21";
-    c.fillRect(SIZE / 2 - 2, 3, 4, SIZE - 6);
-
-    c.fillStyle = "#69747d";
-    c.fillRect(SIZE / 2 - 2, 3, 1, SIZE - 6);
-
-    c.fillStyle = "#080a0c";
-    c.fillRect(SIZE / 2 + 1, 3, 1, SIZE - 6);
-
-    // Тонкая окантовка по периметру — рисуется последней.
-    c.fillStyle = "#252a30";
-    c.fillRect(0, 0, SIZE, 3);
-    c.fillRect(0, SIZE - 3, SIZE, 3);
-    c.fillRect(0, 0, 3, SIZE);
-    c.fillRect(SIZE - 3, 0, 3, SIZE);
-
-    // Едва заметный металлический блик.
-    c.fillStyle = "#4a5560";
-    c.fillRect(0, 0, SIZE, 1);
-    c.fillRect(0, 0, 1, SIZE);
   },
 
-  /** 2. Бамбуковый щит с тёмной окантовкой по периметру */
+  /** Бамбук: 8 стеблей по 8 px (ствол 7 px + щель), блик и тень по бокам, узлы на разной высоте. */
   bamboo: (c, r) => {
-    // Основа.
-    c.fillStyle = "#1b1008";
-    c.fillRect(0, 0, SIZE, SIZE);
-
-    // Поверхность щита.
-    noise(c, r, [165, 140, 70], 18);
-
-    // Стебли бамбука внутри периметра.
-    for (let x = 3; x < SIZE - 3; x += 8) {
-      const width = Math.min(7, SIZE - 3 - x);
-      const shade = (r() - 0.5) * 28;
-
-      const red = Math.max(0, Math.min(255, 165 + shade)) | 0;
-      const green = Math.max(0, Math.min(255, 132 + shade * 0.7)) | 0;
-      const blue = Math.max(0, Math.min(255, 61 + shade * 0.3)) | 0;
-
-      c.fillStyle = `rgb(${red},${green},${blue})`;
-      c.fillRect(x, 3, width, SIZE - 6);
-
-      // Тень и блик по краям стебля.
-      c.fillStyle = "#59401d";
-      c.fillRect(x, 3, 1, SIZE - 6);
-
-      if (width > 3) {
-        c.fillStyle = "#c4a65c";
-        c.fillRect(x + 1, 3, 1, SIZE - 6);
+    for (let s = 0; s < 8; s++) {
+      const x0 = s * 8, sh = (r() - 0.5) * 30;
+      c.fillStyle = "#2a1c0c"; c.fillRect(x0 + 7, 0, 1, SIZE); // щель между стеблями
+      for (let y = 0; y < SIZE; y++) {
+        const g = (r() - 0.5) * 10;
+        c.fillStyle = `rgb(${(168 + sh + g) | 0},${(140 + sh * 0.8 + g) | 0},${(66 + sh * 0.5) | 0})`;
+        c.fillRect(x0, y, 7, 1);
       }
-
-      // Узлы бамбука.
-      for (let y = 16; y < SIZE - 3; y += 16) {
-        c.fillStyle = "#4d3719";
-        c.fillRect(x, y, width, 2);
-
-        c.fillStyle = "#b49a54";
-        c.fillRect(x, y, width, 1);
+      c.fillStyle = "rgba(255,240,170,0.35)"; c.fillRect(x0 + 1, 0, 1, SIZE);
+      c.fillStyle = "rgba(60,40,10,0.35)"; c.fillRect(x0 + 5, 0, 1, SIZE);
+      const ny = (s * 19 + 7) % 32;
+      for (const y of [ny, ny + 32]) {
+        c.fillStyle = "#8c6a2c"; c.fillRect(x0, y - 1, 7, 1);
+        c.fillStyle = "#6b4c1c"; c.fillRect(x0, y, 7, 2);
       }
     }
-
-    // Тонкая обожжённая окантовка по периметру.
-    c.fillStyle = "#29170b";
-    c.fillRect(0, 0, SIZE, 3);
-    c.fillRect(0, SIZE - 3, SIZE, 3);
-    c.fillRect(0, 0, 3, SIZE);
-    c.fillRect(SIZE - 3, 0, 3, SIZE);
-
-    // Тонкий обожжённый блик внутреннего края.
-    c.fillStyle = "#633719";
-    c.fillRect(3, 3, SIZE - 6, 1);
-    c.fillRect(3, 3, 1, SIZE - 6);
-
-    // Почти чёрная внешняя кромка.
-    c.fillStyle = "#0c0704";
-    c.fillRect(0, 0, SIZE, 1);
-    c.fillRect(0, 0, 1, SIZE);
-    c.fillRect(0, SIZE - 1, SIZE, 1);
-    c.fillRect(SIZE - 1, 0, 1, SIZE);
   },
 
-  /** 3. Старые доски из тёмного дерева с металлической рамкой и заклёпками */
+  /** Старые доски из тёмного дерева: 4 доски по 16 px (14 px + щель), волокна, сучки, царапины. */
   darkwood: (c, r) => {
-    // Тёмная основа.
-    c.fillStyle = "#0f0802";
-    c.fillRect(0, 0, SIZE, SIZE);
-
-    // Вертикальные доски внутри будущей рамки.
-    for (let x = 3; x < SIZE - 3; x += 14) {
-      const width = Math.min(13, SIZE - 3 - x);
-
-      const shade = (r() - 0.5) * 24;
-      const red = Math.max(0, Math.min(255, 52 + shade)) | 0;
-      const green = Math.max(0, Math.min(255, 28 + shade * 0.55)) | 0;
-      const blue = Math.max(0, Math.min(255, 10 + shade * 0.25)) | 0;
-
-      c.fillStyle = `rgb(${red},${green},${blue})`;
-      c.fillRect(x, 3, width, SIZE - 6);
-
-      // Шов между досками.
-      c.fillStyle = "#100905";
-      c.fillRect(x, 3, 1, SIZE - 6);
-
-      // Вертикальные волокна и царапины.
-      for (let i = 0; i < 10; i++) {
-        const gx = x + 2 + ((r() * Math.max(1, width - 3)) | 0);
-        const gy = 5 + ((r() * (SIZE - 12)) | 0);
-        const h = 2 + ((r() * 7) | 0);
-
-        c.fillStyle = r() > 0.5 ? "#35200f" : "#050200";
-        c.fillRect(gx, gy, 1, Math.min(h, SIZE - 3 - gy));
+    c.fillStyle = "#0b0602"; c.fillRect(0, 0, SIZE, SIZE); // щели между досками
+    for (let b = 0; b < 4; b++) {
+      const x0 = b * 16, tone = (r() - 0.5) * 22;
+      for (let px = 0; px < 14; px++) {
+        const g = (r() - 0.5) * 20;
+        c.fillStyle = `rgb(${(58 + tone + g) | 0},${(34 + tone * 0.6 + g * 0.6) | 0},${(14 + tone * 0.3) | 0})`;
+        c.fillRect(x0 + px, 0, 1, SIZE);
       }
-
-      // Тонкие светлые прожилки.
-      if (width > 5) {
-        c.fillStyle = "#392313";
-        const gx = x + 2 + ((r() * (width - 4)) | 0);
-        const gy = 5 + ((r() * (SIZE - 12)) | 0);
-        c.fillRect(gx, gy, 1, 5);
+      const kx = x0 + 3 + ((r() * 7) | 0), ky = 6 + ((r() * 52) | 0); // сучок
+      c.fillStyle = "#45260e"; c.fillRect(kx, ky, 3, 5);
+      c.fillStyle = "#1a0e05"; c.fillRect(kx + 1, ky + 1, 1, 3);
+      for (let i = 0; i < 10; i++) { // царапины и трещины
+        c.fillStyle = r() > 0.5 ? "#3e1f0c" : "#050200";
+        c.fillRect(x0 + ((r() * 14) | 0), (r() * SIZE) | 0, 1, ((r() * 5) | 0) + 1);
       }
-    }
-
-    // Металлическая окантовка строго по четырём краям.
-    c.fillStyle = "#3a3a3e";
-    c.fillRect(0, 0, SIZE, 3);
-    c.fillRect(0, SIZE - 3, SIZE, 3);
-    c.fillRect(0, 0, 3, SIZE);
-    c.fillRect(SIZE - 3, 0, 3, SIZE);
-
-    // Блик сверху и слева.
-    c.fillStyle = "#68686e";
-    c.fillRect(0, 0, SIZE, 1);
-    c.fillRect(0, 0, 1, SIZE);
-
-    // Тёмный край снизу и справа.
-    c.fillStyle = "#17171a";
-    c.fillRect(0, SIZE - 1, SIZE, 1);
-    c.fillRect(SIZE - 1, 0, 1, SIZE);
-
-    // Заклёпки небольшие, расположены вдоль периметра.
-    const rivets = [10, 25, 40, 55];
-
-    for (const p of rivets) {
-      // Левая и правая стороны.
-      c.fillStyle = "#111216";
-      c.fillRect(0, p, 3, 2);
-      c.fillRect(SIZE - 3, p, 3, 2);
-
-      c.fillStyle = "#8a8a90";
-      c.fillRect(1, p, 1, 1);
-      c.fillRect(SIZE - 2, p, 1, 1);
-
-      // Верхняя и нижняя стороны.
-      c.fillStyle = "#111216";
-      c.fillRect(p, 0, 2, 3);
-      c.fillRect(p, SIZE - 3, 2, 3);
-
-      c.fillStyle = "#8a8a90";
-      c.fillRect(p, 1, 1, 1);
-      c.fillRect(p, SIZE - 2, 1, 1);
     }
   },
 
-  /** 4. Брезентовое полотно, стянутое веревками в сетку (менее пестрое, светлые веревки) */
+  /** Брезент, стянутый верёвками в сетку: верёвки каждые 16 px, узлы на каждом пересечении. */
   tarp: (c, r) => {
-    // Уменьшена амплитуда шума (10 вместо 22) для более гладкой, менее "пиксельной" поверхности
-    noise(c, r, [45, 75, 40], 10);
-
-    const step = 16;
-    // Веревки (сетка) - значительно светлее
-    for (let i = 0; i <= SIZE; i += step) {
-      c.fillStyle = "#7e7745"; // Светлая оливковая/бежевая веревка
-      c.fillRect(0, i, SIZE, 2);
-      c.fillRect(i, 0, 2, SIZE);
-
-      // Узел на пересечении
-      c.fillStyle = "#7a865a"; // Тень узла
-      c.fillRect(i, i, 3, 3);
-      c.fillStyle = "#bdc89a"; // Яркий блик на узле
-      c.fillRect(i, i, 1, 1);
+    noise(c, r, [62, 80, 48], 9);
+    c.fillStyle = "rgba(0,0,0,0.07)"; // еле заметное плетение
+    for (let y = 0; y < SIZE; y += 2) for (let x = (y / 2) % 2 ? 1 : 0; x < SIZE; x += 2) c.fillRect(x, y, 1, 1);
+    c.fillStyle = "rgba(0,0,0,0.16)"; // мягкие складки
+    for (let i = 0; i < 8; i++) { const sx = (r() * SIZE) | 0, sy = (r() * SIZE) | 0; c.fillRect(sx, sy, 12, 1); c.fillRect(sx + 1, sy + 1, 8, 1); }
+    for (let i = 0; i < SIZE; i += 16) {
+      c.fillStyle = "#a8975c"; c.fillRect(0, i, SIZE, 2); c.fillRect(i, 0, 2, SIZE);
+      c.fillStyle = "#6f6238"; c.fillRect(0, i + 1, SIZE, 1); c.fillRect(i + 1, 0, 1, SIZE);
     }
-
-    // Складки на ткани (мягкие, не портят общую картину)
-    c.fillStyle = "rgba(0, 0, 0, 0.15)";
-    for (let i = 0; i < 8; i++) {
-      const sx = (r() * SIZE) | 0;
-      const sy = (r() * SIZE) | 0;
-      c.fillRect(sx, sy, 12, 1);
-      c.fillRect(sx + 1, sy + 1, 8, 1);
-    }
+    for (let i = 0; i < SIZE; i += 16)
+      for (let j = 0; j < SIZE; j += 16)
+        for (const ox of [0, SIZE]) for (const oy of [0, SIZE]) { // узлы; копии через край — для бесшовности
+          c.fillStyle = "#7d6e3e"; c.fillRect(i - 1 + ox, j - 1 + oy, 4, 4);
+          c.fillStyle = "#cdbd82"; c.fillRect(i - 1 + ox, j - 1 + oy, 2, 2);
+        }
   },
 
-  /** 5. Маскировочная сетка болотных оттенков */
+  /** Маскировочная сетка болотных оттенков: пятна (бесшовно, через край) и ромбы диагональной сетки. */
   camo: (c, r) => {
-    noise(c, r, [40, 60, 30], 15);
-    const colors = ["#3a4a20", "#5a3a1a", "#2a3a15", "#1a2a0a", "#4a5a30"];
-    for (let i = 0; i < 50; i++) {
-      const x = (r() * SIZE) | 0;
-      const y = (r() * SIZE) | 0;
-      const w = (r() * 8 + 4) | 0;
-      const h = (r() * 8 + 4) | 0;
+    noise(c, r, [42, 58, 34], 12);
+    const colors = ["#3a4a20", "#5a3a1a", "#2a3a15", "#1a2a0a", "#4a5a30", "#6a6a3a"];
+    for (let i = 0; i < 46; i++) {
+      const x = (r() * SIZE) | 0, y = (r() * SIZE) | 0, w = ((r() * 10) | 0) + 5, h = ((r() * 8) | 0) + 4;
       c.fillStyle = colors[(r() * colors.length) | 0];
-      c.fillRect(x, y, w, h);
-      if (r() > 0.5) c.fillRect(x + 2, y - 2, w - 2, h);
-      if (r() > 0.5) c.fillRect(x - 2, y + 2, w, h - 2);
+      for (const ox of [0, -SIZE]) for (const oy of [0, -SIZE]) {
+        c.fillRect(x + ox, y + oy, w, h);
+        c.fillRect(x + ox + 2, y + oy - 2, w - 3, h);
+      }
     }
-    c.fillStyle = "rgba(10, 20, 5, 0.4)";
-    for (let i = 0; i < SIZE; i += 8) {
-      c.fillRect(i, 0, 1, SIZE);
-      c.fillRect(0, i, SIZE, 1);
+    c.fillStyle = "rgba(8,16,4,0.42)";
+    for (let y = 0; y < SIZE; y++)
+      for (let x = 0; x < SIZE; x++)
+        if ((x + y) % 8 === 0 || (x - y + SIZE) % 8 === 0) c.fillRect(x, y, 1, 1);
+  },
+
+  /** Обожжённое дерево для рам: угольная поверхность, трещины-чешуйки, зола и редкие тлеющие точки. */
+  burnt: (c, r) => {
+    noise(c, r, [34, 27, 22], 14);
+    c.fillStyle = "#120c09";
+    for (let i = 0; i < 28; i++) {
+      let x = (r() * SIZE) | 0, y = (r() * SIZE) | 0;
+      for (let k = 0, n = 7 + ((r() * 9) | 0); k < n; k++) {
+        c.fillRect(((x % SIZE) + SIZE) % SIZE, ((y % SIZE) + SIZE) % SIZE, 1, 1);
+        x += r() > 0.5 ? 1 : 0; y += ((r() * 3) | 0) - 1;
+        if (r() > 0.6) y += 1;
+      }
     }
-  }
+    c.fillStyle = "#4a4540";
+    for (let i = 0; i < 30; i++) c.fillRect((r() * SIZE) | 0, (r() * SIZE) | 0, 1, 1);
+    for (let i = 0; i < 14; i++) { c.fillStyle = r() > 0.7 ? "#a84a14" : "#7a3010"; c.fillRect((r() * SIZE) | 0, (r() * SIZE) | 0, 1, 1); }
+  },
 };
 
+/** Нужно для проверки и предпросмотра текстур вне игры. */
+export const TEXTURE_DRAWERS = DRAW;
 
 const cache = new WeakMap<Scene, Map<Kind, DynamicTexture>>();
 
