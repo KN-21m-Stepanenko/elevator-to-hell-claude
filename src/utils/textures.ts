@@ -2,8 +2,14 @@ import { Color3, DynamicTexture, Scene, StandardMaterial, Texture } from "@babyl
 
 export type Kind =
   | "concrete" | "floor" | "metal" | "crate" | "ceiling" | "brick" | "tile"
-  // Щиты и укрытия. В этих текстурах НЕТ окантовки: рама, перегородка и заклёпки — геометрия модели (см. addFramedBox).
-  | "vent" | "bamboo" | "darkwood" | "tarp" | "camo" | "burnt";
+  | "vent" | "bamboo" | "darkwood" | "tarp" | "camo";
+
+/**
+ * Виды, у которых рамка нарисована на самой текстуре. Такая текстура мапится целиком на каждую грань бокса
+ * (см. addBox), поэтому рамка идёт ровно по периметру грани, а не повторяется по мировой сетке.
+ * Рамка плоская: ни полигонов, ни отдельных мешей.
+ */
+export const FIT_KINDS: ReadonlySet<Kind> = new Set<Kind>(["crate", "vent", "bamboo", "darkwood"]);
 const SIZE = 64;
 
 /** Детерминированный генератор случайных чисел (mulberry32). */
@@ -53,6 +59,22 @@ function drawPerimeterBorder(
     c.fillRect(b - 1, b, 1, SIZE - 2 * b);
     c.fillRect(SIZE - b, b, 1, SIZE - 2 * b);
   }
+}
+
+/**
+ * Рамка на текстуре строго по периметру: w px тела, внешний контур 1 px,
+ * скос внутреннего края (свет сверху и слева, тень снизу и справа).
+ */
+function drawFrame(c: Ctx, w: number, body: string, edge: string, light: string, shade: string) {
+  const S = SIZE;
+  c.fillStyle = body;
+  c.fillRect(0, 0, S, w); c.fillRect(0, S - w, S, w); c.fillRect(0, 0, w, S); c.fillRect(S - w, 0, w, S);
+  c.fillStyle = light;
+  c.fillRect(w, w - 1, S - 2 * w, 1); c.fillRect(w - 1, w, 1, S - 2 * w);
+  c.fillStyle = shade;
+  c.fillRect(w, S - w, S - 2 * w, 1); c.fillRect(S - w, w, 1, S - 2 * w);
+  c.fillStyle = edge;
+  c.fillRect(0, 0, S, 1); c.fillRect(0, S - 1, S, 1); c.fillRect(0, 0, 1, S); c.fillRect(S - 1, 0, 1, S);
 }
 
 const DRAW: Record<Kind, (c: Ctx, r: Rnd) => void> = {
@@ -110,9 +132,9 @@ const DRAW: Record<Kind, (c: Ctx, r: Rnd) => void> = {
     c.fillRect(0, SIZE / 2, SIZE, 2); c.fillRect(SIZE / 2, 0, 2, SIZE);
   },
 
-  // ---------- Новые текстуры (бесшовные 64×64, без окантовки: рама строится моделью) ----------
+  // ---------- Новые текстуры 64×64: tarp и camo бесшовные; vent, bamboo, darkwood с рамкой на самой текстуре (FIT_KINDS) ----------
 
-  /** Горизонтальные жалюзи вентиляции: 8 пластин на повтор, блик сверху, скос снизу, редкие ржавые подтёки. */
+  /** Жалюзи вентиляции: 8 пластин, металлическая рамка по периметру и вертикальная перегородка посередине. */
   vent: (c, r) => {
     c.fillStyle = "#101315"; c.fillRect(0, 0, SIZE, SIZE); // тёмный проём между пластинами
     for (let y = 0; y < SIZE; y += 8) {
@@ -125,31 +147,43 @@ const DRAW: Record<Kind, (c: Ctx, r: Rnd) => void> = {
       c.fillStyle = "#2b3238"; c.fillRect(0, y + 6, SIZE, 1); // скос вниз
       if (r() > 0.55) { c.fillStyle = "#6b4a30"; c.fillRect((r() * 44) | 0, y + 2 + ((r() * 3) | 0), ((r() * 12) | 0) + 3, 1); }
     }
+    drawFrame(c, 5, "#3a4148", "#14181b", "#8a97a4", "#1b2025");
+    const mx = SIZE / 2 - 2; // перегородка 4 px строго по центру, между верхней и нижней рамкой
+    c.fillStyle = "#3a4148"; c.fillRect(mx, 5, 4, SIZE - 10);
+    c.fillStyle = "#8a97a4"; c.fillRect(mx, 5, 1, SIZE - 10);
+    c.fillStyle = "#1b2025"; c.fillRect(mx + 3, 5, 1, SIZE - 10);
   },
 
-  /** Бамбук: 8 стеблей по 8 px (ствол 7 px + щель), блик и тень по бокам, узлы на разной высоте. */
+  /** Бамбуковый щит: 8 стеблей с узлами и тёмная обожжённая рамка по периметру. */
   bamboo: (c, r) => {
     for (let s = 0; s < 8; s++) {
       const x0 = s * 8, sh = (r() - 0.5) * 30;
-      c.fillStyle = "#2a1c0c"; c.fillRect(x0 + 7, 0, 1, SIZE); // щель между стеблями
+      c.fillStyle = "#2a1c0c"; c.fillRect(x0 + 7, 0, 1, SIZE);
       for (let y = 0; y < SIZE; y++) {
         const g = (r() - 0.5) * 10;
         c.fillStyle = `rgb(${(168 + sh + g) | 0},${(140 + sh * 0.8 + g) | 0},${(66 + sh * 0.5) | 0})`;
         c.fillRect(x0, y, 7, 1);
       }
       c.fillStyle = "rgba(255,240,170,0.35)"; c.fillRect(x0 + 1, 0, 1, SIZE);
-      c.fillStyle = "rgba(60,40,10,0.35)"; c.fillRect(x0 + 5, 0, 1, SIZE);
+      c.fillStyle = "rgba(65, 44, 13, 0.35)"; c.fillRect(x0 + 5, 0, 1, SIZE);
       const ny = (s * 19 + 7) % 32;
       for (const y of [ny, ny + 32]) {
         c.fillStyle = "#8c6a2c"; c.fillRect(x0, y - 1, 7, 1);
         c.fillStyle = "#6b4c1c"; c.fillRect(x0, y, 7, 2);
       }
     }
+    drawFrame(c, 5, "#352315", "#2a1c11", "#4b3822", "#3c2f24");
+    for (let i = 0; i < 140; i++) { // обугленная фактура: пятна копоти и редкие тлеющие точки только на рамке
+      const x = (r() * SIZE) | 0, y = (r() * SIZE) | 0;
+      if (x >= 5 && x < SIZE - 5 && y >= 5 && y < SIZE - 5) continue;
+      c.fillStyle = r() > 0.88 ? "#7a3010" : r() > 0.5 ? "#2e1f11" : "#4c3523";
+      c.fillRect(x, y, 1, 1);
+    }
   },
 
-  /** Старые доски из тёмного дерева: 4 доски по 16 px (14 px + щель), волокна, сучки, царапины. */
+  /** Старые доски из тёмного дерева: металлическая рамка по периметру и заклёпки (симметрично). */
   darkwood: (c, r) => {
-    c.fillStyle = "#0b0602"; c.fillRect(0, 0, SIZE, SIZE); // щели между досками
+    c.fillStyle = "#0b0602"; c.fillRect(0, 0, SIZE, SIZE);
     for (let b = 0; b < 4; b++) {
       const x0 = b * 16, tone = (r() - 0.5) * 22;
       for (let px = 0; px < 14; px++) {
@@ -157,12 +191,20 @@ const DRAW: Record<Kind, (c: Ctx, r: Rnd) => void> = {
         c.fillStyle = `rgb(${(58 + tone + g) | 0},${(34 + tone * 0.6 + g * 0.6) | 0},${(14 + tone * 0.3) | 0})`;
         c.fillRect(x0 + px, 0, 1, SIZE);
       }
-      const kx = x0 + 3 + ((r() * 7) | 0), ky = 6 + ((r() * 52) | 0); // сучок
+      const kx = x0 + 3 + ((r() * 7) | 0), ky = 8 + ((r() * 46) | 0); // сучок
       c.fillStyle = "#45260e"; c.fillRect(kx, ky, 3, 5);
       c.fillStyle = "#1a0e05"; c.fillRect(kx + 1, ky + 1, 1, 3);
       for (let i = 0; i < 10; i++) { // царапины и трещины
         c.fillStyle = r() > 0.5 ? "#3e1f0c" : "#050200";
         c.fillRect(x0 + ((r() * 14) | 0), (r() * SIZE) | 0, 1, ((r() * 5) | 0) + 1);
+      }
+    }
+    drawFrame(c, 5, "#44474d", "#16181b", "#8d9199", "#222428");
+    // Заклёпки 2×2 по центру полосы рамки: позиции зеркальны относительно центра (p и SIZE-2-p).
+    for (const p of [6, 20, 42, 56]) {
+      for (const [x, y] of [[p, 2], [p, SIZE - 4], [2, p], [SIZE - 4, p]]) {
+        c.fillStyle = "#2a2c30"; c.fillRect(x, y, 2, 2);
+        c.fillStyle = "#b9bdc6"; c.fillRect(x, y, 1, 1);
       }
     }
   },
@@ -203,23 +245,6 @@ const DRAW: Record<Kind, (c: Ctx, r: Rnd) => void> = {
       for (let x = 0; x < SIZE; x++)
         if ((x + y) % 8 === 0 || (x - y + SIZE) % 8 === 0) c.fillRect(x, y, 1, 1);
   },
-
-  /** Обожжённое дерево для рам: угольная поверхность, трещины-чешуйки, зола и редкие тлеющие точки. */
-  burnt: (c, r) => {
-    noise(c, r, [34, 27, 22], 14);
-    c.fillStyle = "#120c09";
-    for (let i = 0; i < 28; i++) {
-      let x = (r() * SIZE) | 0, y = (r() * SIZE) | 0;
-      for (let k = 0, n = 7 + ((r() * 9) | 0); k < n; k++) {
-        c.fillRect(((x % SIZE) + SIZE) % SIZE, ((y % SIZE) + SIZE) % SIZE, 1, 1);
-        x += r() > 0.5 ? 1 : 0; y += ((r() * 3) | 0) - 1;
-        if (r() > 0.6) y += 1;
-      }
-    }
-    c.fillStyle = "#4a4540";
-    for (let i = 0; i < 30; i++) c.fillRect((r() * SIZE) | 0, (r() * SIZE) | 0, 1, 1);
-    for (let i = 0; i < 14; i++) { c.fillStyle = r() > 0.7 ? "#a84a14" : "#7a3010"; c.fillRect((r() * SIZE) | 0, (r() * SIZE) | 0, 1, 1); }
-  },
 };
 
 /** Нужно для проверки и предпросмотра текстур вне игры. */
@@ -235,8 +260,10 @@ function textures(scene: Scene) {
     (Object.keys(DRAW) as Kind[]).forEach((kind, i) => {
       const tex = new DynamicTexture(`tex_${kind}`, { width: SIZE, height: SIZE }, scene, false, Texture.NEAREST_SAMPLINGMODE);
       DRAW[kind](tex.getContext() as unknown as Ctx, rng(1000 + i));
-      tex.wrapU = Texture.WRAP_ADDRESSMODE; // DynamicTexture по умолчанию CLAMP
-      tex.wrapV = Texture.WRAP_ADDRESSMODE;
+      // Тайлящиеся — WRAP; текстуры с рамкой (мапятся целиком на грань) — CLAMP, чтобы край не подмешивал противоположный.
+      const mode = FIT_KINDS.has(kind) ? Texture.CLAMP_ADDRESSMODE : Texture.WRAP_ADDRESSMODE;
+      tex.wrapU = mode;
+      tex.wrapV = mode;
       tex.update();
       fresh.set(kind, tex);
     });
